@@ -1,0 +1,292 @@
+<title>The Fidget Bureau — fifty small machines for busy fingers</title>
+<style>
+  :root {
+    --ground: #191512;
+    --card: #221C16;
+    --stage: #14100D;
+    --line: #39312A;
+    --line-soft: #2A241E;
+    --text: #EDE6DA;
+    --muted: #A2947F;
+    --amber: #F5A524;
+    --coral: #F2665B;
+    --mint: #4FC9A0;
+    --sky: #58A6F2;
+    --lilac: #B08CE8;
+    --display: 'Futura', 'Avenir Next', 'Century Gothic', 'Trebuchet MS', sans-serif;
+    --body: 'Avenir Next', 'Avenir', 'Seravek', 'Segoe UI', system-ui, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  }
+
+  html { background: var(--ground); }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(120% 90% at 50% -10%, rgba(245, 165, 36, 0.06), transparent 60%);
+  }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- masthead ---- */
+  header.wrap { padding-top: 56px; padding-bottom: 8px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .eyebrow b { color: var(--amber); font-weight: 400; }
+  h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(2.1rem, 5.6vw, 4rem);
+    line-height: 1.04;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    margin: 14px 0 18px;
+    max-width: 18ch;
+    text-wrap: balance;
+    cursor: default;
+  }
+  h1 .word { display: inline-block; white-space: nowrap; }
+  h1 .glyph { display: inline-block; will-change: transform; }
+  .lede {
+    max-width: 58ch;
+    margin: 0 0 26px;
+    color: var(--muted);
+    font-size: 1.02rem;
+  }
+  .lede em { color: var(--text); font-style: normal; }
+
+  /* ---- ledger ---- */
+  .ledger {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 9px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .ledger .bar {
+    width: 130px;
+    height: 3px;
+    background: var(--line-soft);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .ledger .bar i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--amber);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+  }
+  .ledger #tally { color: var(--text); }
+  .ledger #tally-done { color: var(--amber); }
+
+  /* ---- chips ---- */
+  nav.chips {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: color-mix(in srgb, var(--ground) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  nav.chips .wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  nav.chips button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 13px;
+    cursor: pointer;
+  }
+  nav.chips button i { font-style: normal; opacity: 0.55; margin-left: 2px; }
+  nav.chips button:hover { color: var(--text); border-color: var(--muted); }
+  nav.chips button[aria-pressed="true"] {
+    color: var(--amber);
+    border-color: var(--amber);
+  }
+  nav.chips button:focus-visible,
+  #reset-ledger:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  /* ---- exhibit grid ---- */
+  main.wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 18px;
+    padding-top: 26px;
+    padding-bottom: 40px;
+  }
+  .card {
+    margin: 0;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.25s ease, transform 0.25s ease;
+  }
+  .card:hover { border-color: #4A4036; transform: translateY(-2px); }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .card:hover { transform: none; transition: none; }
+  }
+  .stage {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    background: var(--stage);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .stage canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: crosshair;
+  }
+  .outoforder {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    gap: 6px;
+    text-align: center;
+    background: var(--stage);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 20px;
+  }
+  .outoforder strong { color: var(--coral); letter-spacing: 0.2em; }
+
+  .plaque {
+    position: relative;
+    padding: 11px 14px 13px;
+  }
+  .plaque .no {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+  }
+  .plaque h3 {
+    font-family: var(--display);
+    font-size: 15.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 3px 0 2px;
+  }
+  .plaque .hint {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .plaque .tick {
+    position: absolute;
+    top: 10px;
+    right: 13px;
+    color: var(--amber);
+    font-size: 13px;
+    opacity: 0;
+    transform: scale(0.4);
+    transition: opacity 0.25s ease, transform 0.35s cubic-bezier(0.2, 2.2, 0.4, 1);
+  }
+  .card.fiddled .tick { opacity: 1; transform: scale(1); }
+
+  /* ---- footer ---- */
+  footer.wrap {
+    border-top: 1px solid var(--line-soft);
+    padding-top: 22px;
+    padding-bottom: 48px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  #reset-ledger {
+    font: inherit;
+    letter-spacing: inherit;
+    color: var(--muted);
+    background: none;
+    border: none;
+    border-bottom: 1px dotted var(--muted);
+    padding: 0 0 1px;
+    cursor: pointer;
+  }
+  #reset-ledger:hover { color: var(--coral); border-color: var(--coral); }
+
+  @media (max-width: 560px) {
+    header.wrap { padding-top: 36px; }
+    .wrap { padding: 0 16px; }
+    main.wrap { gap: 14px; }
+  }
+</style>
+
+<header class="wrap">
+  <p class="eyebrow"><b>The Fidget Bureau</b> · Dept. of Idle Hands · Est. 2026 · Admission free</p>
+  <h1 id="masthead">Fifty small machines for busy fingers</h1>
+  <p class="lede">Every exhibit in this collection responds to touch — <em>drag, scrub, spin, rake, poke</em>. There are no goals, no scores, and no way to lose. The Bureau asks only that you fidget responsibly.</p>
+  <p class="ledger">
+    <span>Ledger</span>
+    <span class="bar"><i id="tally-bar"></i></span>
+    <span><span id="tally">0 / 0</span> fiddled</span>
+    <span id="tally-done" hidden>— a completionist. The Bureau salutes you.</span>
+  </p>
+</header>
+
+<nav class="chips" aria-label="Filter exhibits"><div class="wrap" id="chips"></div></nav>
+
+<main class="wrap" id="grid"></main>
+
+<footer class="wrap">
+  <span>The Fidget Bureau · all exhibits handmade from mathematics · no cookies, no points, no purpose</span>
+  <button id="reset-ledger" type="button">Reset the ledger</button>
+</footer>
+
+<script>
+/*__RUNTIME__*/
+</script>
+<script>
+/*__FIDGETS__*/
+</script>
