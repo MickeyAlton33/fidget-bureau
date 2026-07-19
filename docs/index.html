@@ -5654,6 +5654,230 @@ F.register({
 });
 })();
 
+/* --- 26-ratchet.js --- */
+;(() => {
+/* № 26 — Ratchet & pawl. A sky sawtooth wheel, an amber hand-lever carrying a
+   coral driving pawl, and a fixed coral holding pawl — each on its own little
+   spring. Rock the lever: forward strokes ratchet the wheel tooth-by-tooth with
+   a springy overshoot and a spark; back-strokes only carry the lever home while
+   the holding pawl locks the wheel. The advance is strictly one-way — no matter
+   how you drag, the wheel never unwinds. */
+F.register({
+  n: 26, id: 'ratchet', cat: 'mech',
+  title: 'Ratchet & pawl', hint: 'Drag the lever — it clicks one way only',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const AMBER = inks[0], CORAL = inks[1], SKY = inks[3], CREAM = inks[5];
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+    const N = 12, PITCH = TAU / N, RISER = 0.17;   // riser = steep fraction of a tooth
+    const LN = Math.PI / 2, SW = 1.15;             // lever neutral (points down) + stroke half-arc
+    const CONTACT = 0.17;                          // driving-pawl tip trails the lever by this
+    const HOLD = -0.62, HOLD_OFF = 0.34;           // holding-pawl contact angle + anchor lead
+    const SPARK = [0.4, 1.7, 3.0, 4.3];            // spark ray angles (allocated once)
+
+    // ---- size-derived layout (rebuilt on resize) ----
+    let cx = 0, cy = 0, m = 0, Rroot = 0, Rtip = 0, ARM = 0, HANDLE = 0;
+    let hax = 0, hay = 0, hpx = 0, hpy = 0, LW = 2;
+    function layout() {
+      const w = env.w, h = env.h; m = Math.min(w, h);
+      cx = w * 0.5; cy = h * 0.455;
+      Rtip = 0.30 * m; Rroot = Rtip - 0.075 * m;
+      ARM = Rtip + 0.055 * m; HANDLE = Rtip + 0.165 * m;
+      LW = Math.max(2, 0.0125 * m);
+      hax = cx + (Rtip + 0.115 * m) * Math.cos(HOLD + HOLD_OFF);       // holding-pawl pivot
+      hay = cy + (Rtip + 0.115 * m) * Math.sin(HOLD + HOLD_OFF);
+      hpx = cx + (Rtip + 0.205 * m) * Math.cos(HOLD + HOLD_OFF + 0.17); // its fixed spring post
+      hpy = cy + (Rtip + 0.205 * m) * Math.sin(HOLD + HOLD_OFF + 0.17);
+    }
+    layout();
+
+    function toothR(local) {               // tooth-profile radius at a wheel-local angle
+      let u = local % PITCH; if (u < 0) u += PITCH;
+      const f = u / PITCH;
+      return f < RISER
+        ? Rroot + (Rtip - Rroot) * (f / RISER)                 // steep riser (up)
+        : Rtip - (Rtip - Rroot) * ((f - RISER) / (1 - RISER)); // long ramp (down)
+    }
+    function coilSpring(x1, y1, x2, y2, coils, amp, wid) {
+      const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) + 1e-6;
+      const px = -dy / L, py = dx / L, seg = coils * 2;
+      g.strokeStyle = CORAL; g.lineWidth = wid;
+      g.beginPath(); g.moveTo(x1, y1);
+      for (let i = 1; i < seg; i++) {
+        const f = i / seg, s = (i & 1) ? 1 : -1;
+        g.lineTo(x1 + dx * f + px * amp * s, y1 + dy * f + py * amp * s);
+      }
+      g.lineTo(x2, y2); g.stroke();
+    }
+
+    // ---- state ----
+    let leverAng = LN, leverVel = 0, leverTarget = LN, leverPrev = LN;
+    let drive = 0, lockNotch = 0;          // monotonic: forward-only accumulation + committed detent
+    let wheelAng = 0, wheelVel = 0;
+    let flashD = 0, flashH = 0, snap = 0, fAng = LN - CONTACT;
+    let grab = null, grabbed = 0, hx = -999, hy = -999;
+    const seed = Math.random() * TAU;
+
+    return {
+      draw(t, dt) {
+        const w = env.w, h = env.h;
+
+        // ---------- lever (spring toward finger while dragging, else idle sway) ----------
+        const tgt = grab ? leverTarget : LN + Math.sin(t * 1.1 + seed) * 0.028;
+        const kL = 170, cL = 2 * 0.62 * Math.sqrt(kL);
+        leverVel += (-kL * (leverAng - tgt) - cL * leverVel) * dt;
+        leverVel = clamp(leverVel, -90, 90);
+        leverAng = clamp(leverAng + leverVel * dt, LN - SW - 0.25, LN + SW + 0.25);
+
+        // forward-only drive: only while actively dragging, only on forward motion
+        const dL = leverAng - leverPrev; leverPrev = leverAng;
+        if (grab && dL > 0) drive += dL;
+        const nn = Math.floor(drive / PITCH);
+        if (nn > lockNotch) {                       // one or more teeth committed -> click(s)
+          const steps = Math.min(nn - lockNotch, 5);
+          lockNotch = nn;
+          wheelVel += 0.8 * steps;                  // little forward kick on top of the step
+          flashD = 1; flashH = 1; snap = 1; fAng = leverAng - CONTACT;
+        }
+        if (lockNotch > 120000) {                   // fold huge angles, keeping every phase aligned
+          const wc = Math.floor(lockNotch / N) * N;
+          lockNotch -= wc; drive -= wc * PITCH; wheelAng -= wc * PITCH;
+        }
+
+        // ---------- wheel: spring to the committed notch (one-way, springy snap) ----------
+        const wtar = lockNotch * PITCH;
+        const kW = 320, cW = 2 * 0.42 * Math.sqrt(kW);
+        wheelVel += (-kW * (wheelAng - wtar) - cW * wheelVel) * dt;
+        wheelVel = clamp(wheelVel, -18, 18);
+        wheelAng += wheelVel * dt;
+        const rest = 1 - Math.min(1, Math.abs(wheelVel) * 3 + snap);      // 1 only once settled
+        const wa = wheelAng + rest * (Math.sin(t * 2.4 + seed) * 0.007 +  // micro-creep at idle
+          Math.sin(t * 5.7 + seed * 2) * 0.004);
+
+        // decays
+        flashD = Math.max(0, flashD - dt * 6);
+        flashH = Math.max(0, flashH - dt * 6);
+        snap = Math.max(0, snap - dt * 7);
+        grabbed += ((grab ? 1 : 0) - grabbed) * Math.min(1, 12 * dt);
+
+        // ================= render =================
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        g.lineCap = 'round'; g.lineJoin = 'round';
+
+        // wheel body: faint disc, spokes, sawtooth ring, hub
+        g.globalAlpha = 0.10; g.fillStyle = SKY;
+        g.beginPath(); g.arc(cx, cy, Rroot, 0, TAU); g.fill();
+        g.globalAlpha = 0.28; g.strokeStyle = SKY; g.lineWidth = LW;
+        for (let s = 0; s < 6; s++) {
+          const a = wa + s * (TAU / 6);
+          g.beginPath();
+          g.moveTo(cx + Rroot * 0.28 * Math.cos(a), cy + Rroot * 0.28 * Math.sin(a));
+          g.lineTo(cx + Rroot * 0.9 * Math.cos(a), cy + Rroot * 0.9 * Math.sin(a));
+          g.stroke();
+        }
+        g.globalAlpha = 1;
+        g.beginPath();
+        for (let k = 0; k < N; k++) {
+          const a0 = wa + k * PITCH, ac = a0 + RISER * PITCH;
+          g.lineTo(cx + Rroot * Math.cos(a0), cy + Rroot * Math.sin(a0));
+          g.lineTo(cx + Rtip * Math.cos(ac), cy + Rtip * Math.sin(ac));
+        }
+        g.closePath();
+        g.globalAlpha = 0.13; g.fillStyle = SKY; g.fill();
+        g.globalAlpha = 1; g.strokeStyle = SKY; g.lineWidth = LW * 1.15; g.stroke();
+        g.beginPath(); g.arc(cx, cy, Rroot * 0.24, 0, TAU); g.stroke();
+
+        // ---------- holding pawl (fixed, coral) ----------
+        {
+          const rS = toothR(HOLD - wa) + LW;
+          const tx = cx + rS * Math.cos(HOLD), ty = cy + rS * Math.sin(HOLD);
+          coilSpring(hpx, hpy, (hax + tx) / 2, (hay + ty) / 2, 3, LW * 1.3, LW * 0.7);
+          g.strokeStyle = CREAM; g.globalAlpha = 0.5; g.lineWidth = LW * 0.9;   // fixed bracket stub
+          g.beginPath(); g.moveTo(hax, hay);
+          g.lineTo(hax + LW * 2.6 * Math.cos(HOLD + HOLD_OFF), hay + LW * 2.6 * Math.sin(HOLD + HOLD_OFF));
+          g.stroke(); g.globalAlpha = 1;
+          g.strokeStyle = CORAL; g.lineWidth = LW * 1.5;                        // pawl finger
+          g.beginPath(); g.moveTo(hax, hay); g.lineTo(tx, ty); g.stroke();
+          g.fillStyle = CORAL; g.beginPath(); g.arc(tx, ty, LW * 1.1, 0, TAU); g.fill();
+          g.fillStyle = bg; g.beginPath(); g.arc(hax, hay, LW * 0.8, 0, TAU); g.fill();
+          g.strokeStyle = CORAL; g.lineWidth = LW * 0.8; g.stroke();
+          if (flashH > 0) glow(tx, ty, flashH);
+        }
+
+        // ---------- lever + driving pawl (amber arm, coral pawl) ----------
+        const ahx = cx + HANDLE * Math.cos(leverAng), ahy = cy + HANDLE * Math.sin(leverAng);
+        const dAng = leverAng - CONTACT;                 // driving-pawl contact angle
+        const rSd = toothR(dAng - wa);                   // rides the real teeth
+        const dtr = rSd + LW + snap * LW * 2.2;          // pops outward on each snap
+        const dtx = cx + dtr * Math.cos(dAng), dty = cy + dtr * Math.sin(dAng);
+        const dax = cx + ARM * Math.cos(leverAng), day = cy + ARM * Math.sin(leverAng);   // pivot on lever
+        const spx = cx + (ARM + 0.075 * m) * Math.cos(leverAng + 0.05);                   // spring stud
+        const spy = cy + (ARM + 0.075 * m) * Math.sin(leverAng + 0.05);
+        // arm
+        g.strokeStyle = AMBER; g.lineWidth = LW * 2.1;
+        g.beginPath(); g.moveTo(cx, cy); g.lineTo(ahx, ahy); g.stroke();
+        g.strokeStyle = CREAM; g.globalAlpha = 0.22; g.lineWidth = LW * 0.7;
+        g.beginPath(); g.moveTo(cx, cy); g.lineTo(ahx, ahy); g.stroke();
+        g.globalAlpha = 1;
+        // driving pawl spring + finger + tip
+        coilSpring(spx, spy, (dax + dtx) / 2, (day + dty) / 2, 3, LW * 1.2, LW * 0.7);
+        g.strokeStyle = CORAL; g.lineWidth = LW * 1.5;
+        g.beginPath(); g.moveTo(dax, day); g.lineTo(dtx, dty); g.stroke();
+        g.fillStyle = CORAL; g.beginPath(); g.arc(dtx, dty, LW * 1.1, 0, TAU); g.fill();
+        if (flashD > 0) glow(cx + rSd * Math.cos(fAng), cy + rSd * Math.sin(fAng), flashD);
+        // handle knob
+        const kr = 0.052 * m;
+        g.fillStyle = AMBER; g.beginPath(); g.arc(ahx, ahy, kr, 0, TAU); g.fill();
+        g.strokeStyle = bg; g.lineWidth = LW * 0.9; g.stroke();
+        g.fillStyle = CREAM; g.beginPath(); g.arc(ahx, ahy, LW * 0.7, 0, TAU); g.fill();
+        // center pivot cap
+        g.fillStyle = AMBER; g.beginPath(); g.arc(cx, cy, LW * 2.0, 0, TAU); g.fill();
+        g.fillStyle = CREAM; g.beginPath(); g.arc(cx, cy, LW * 0.8, 0, TAU); g.fill();
+
+        // grab / hover affordance on the handle
+        const near = Math.hypot(hx - ahx, hy - ahy) < kr + 16;
+        const pulse = 0.5 + 0.5 * Math.sin(t * 2.3 + seed);
+        const aff = Math.max(grabbed, near ? 0.7 : 0.16 + 0.16 * pulse);
+        if (aff > 0.02) {
+          g.globalAlpha = aff * 0.6; g.strokeStyle = CREAM; g.lineWidth = LW * 0.9;
+          g.beginPath(); g.arc(ahx, ahy, kr + LW * 1.6 + pulse * 2, 0, TAU); g.stroke();
+          g.globalAlpha = 1;
+        }
+
+        function glow(x, y, a) {
+          g.fillStyle = CREAM;
+          g.globalAlpha = a * 0.20; g.beginPath(); g.arc(x, y, LW * 3.4, 0, TAU); g.fill();
+          g.globalAlpha = a * 0.9; g.beginPath(); g.arc(x, y, LW * (1.0 + a), 0, TAU); g.fill();
+          g.globalAlpha = a * 0.8; g.strokeStyle = CREAM; g.lineWidth = LW * 0.7;
+          for (let i = 0; i < 4; i++) {
+            const ra = SPARK[i] + fAng;
+            g.beginPath(); g.moveTo(x, y);
+            g.lineTo(x + LW * (2 + 3 * a) * Math.cos(ra), y + LW * (2 + 3 * a) * Math.sin(ra));
+            g.stroke();
+          }
+          g.globalAlpha = 1;
+        }
+      },
+      down(p) { grab = { a0: Math.atan2(p.y - cy, p.x - cx) }; },
+      move(p) {
+        if (grab && p.held) {
+          const a = Math.atan2(p.y - cy, p.x - cx);
+          let da = a - grab.a0;
+          while (da > Math.PI) da -= TAU;
+          while (da < -Math.PI) da += TAU;
+          grab.a0 = a;
+          leverTarget = clamp(leverTarget + da, LN - SW, LN + SW);
+        } else { hx = p.x; hy = p.y; }
+      },
+      up() { grab = null; },
+      leave() { hx = -999; hy = -999; },
+      resize() { layout(); },
+    };
+  },
+});
+})();
+
 /* --- 27-iron-filings.js --- */
 ;(() => {
 /* № 27 — Iron filings. The classic tray: a two-tone bar magnet rides over a
@@ -6999,6 +7223,238 @@ F.register({
 });
 })();
 
+/* --- 32-ink-bloom.js --- */
+;(() => {
+/* № 32 — Ink bloom. A dark pane of still water. Tap and a drop of ink
+   blooms — a burst of dye that expands, slows, softens and fades into
+   wispy tendrils. Drag to stir: each stroke leaves decaying eddies that
+   swirl the dye into ribbons. Left alone, the water is never still — a
+   faint curl current drifts the dye and stray drops keep seeping in.
+   Dye is ≤800 soft blobs (allocated once, recycled), advected by a
+   procedural curl flow plus a handful of Gaussian vortices — no grid. */
+F.register({
+  n: 32, id: 'ink-bloom', cat: 'matter',
+  title: 'Ink bloom', hint: 'Tap to drop ink — drag to stir',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const N = 800;
+
+    // --- dye pool, allocated ONCE and recycled through a ring cursor ---
+    const px = new Float32Array(N), py = new Float32Array(N);   // position (CSS px)
+    const vx = new Float32Array(N), vy = new Float32Array(N);   // ejection velocity (decays)
+    const age = new Float32Array(N), ttl = new Float32Array(N); // seconds lived / to live
+    const rad = new Float32Array(N), alp = new Float32Array(N); // base blob radius / alpha
+    const ink = new Uint8Array(N);                              // which sprite (0..pick-1)
+    for (let i = 0; i < N; i++) { ttl[i] = 1; age[i] = 2; }     // start every slot dead
+    let head = 0;
+
+    // three inks — a different one per drop
+    const pick = [1, 3, 2]; // coral, sky, mint
+    let inkCursor = 0;
+
+    // --- soft radial blob sprite, one per ink, pre-rendered ONCE ---
+    const D = 64;
+    function makeSprite(hex) {
+      if (typeof OffscreenCanvas === 'undefined') return { width: D, height: D };
+      const oc = new OffscreenCanvas(D, D);
+      const c = oc.getContext('2d');
+      const r = parseInt(hex.slice(1, 3), 16);
+      const gg = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      const grad = c.createRadialGradient(D / 2, D / 2, 0, D / 2, D / 2, D / 2);
+      grad.addColorStop(0.00, `rgba(${r},${gg},${b},1)`);
+      grad.addColorStop(0.45, `rgba(${r},${gg},${b},0.32)`);
+      grad.addColorStop(1.00, `rgba(${r},${gg},${b},0)`);
+      c.fillStyle = grad;
+      c.fillRect(0, 0, D, D);
+      return oc;
+    }
+    const sprites = pick.map(i => makeSprite(inks[i]));
+
+    // translucent veil in the ground colour — decays old dye into soft trails
+    const veil = `rgba(${parseInt(bg.slice(1, 3), 16)},${parseInt(bg.slice(3, 5), 16)},${parseInt(bg.slice(5, 7), 16)},0.24)`;
+
+    // --- stirring eddies: a few decaying Gaussian vortices ---
+    const MV = 14;
+    const vcx = new Float32Array(MV), vcy = new Float32Array(MV);
+    const vstr = new Float32Array(MV);                          // swirl (1/s), signed
+    const vpx = new Float32Array(MV), vpy = new Float32Array(MV); // along-stroke push (px/s)
+    const vinv = new Float32Array(MV), vcut = new Float32Array(MV); // falloff constants
+    const vlife = new Float32Array(MV);
+    function addVortex(x, y, str, pushx, pushy, sig) {
+      let s = 0, m = vlife[0];
+      for (let i = 1; i < MV; i++) if (vlife[i] < m) { m = vlife[i]; s = i; }
+      const s2 = Math.max(1, sig * sig);
+      vcx[s] = x; vcy[s] = y;
+      vstr[s] = Math.max(-5, Math.min(5, str));
+      vpx[s] = Math.max(-760, Math.min(760, pushx));
+      vpy[s] = Math.max(-760, Math.min(760, pushy));
+      vinv[s] = 1 / (2 * s2);
+      vcut[s] = 6 * s2;
+      vlife[s] = 1;
+    }
+
+    // --- release a bloom of dye ---
+    function bloom(x, y, si, o) {
+      const S = Math.min(env.w || 300, env.h || 300);
+      const spd = o.spd * S, rBase = o.rad * S;
+      for (let k = 0; k < o.count; k++) {
+        const i = head; head = (head + 1) % N;
+        const a = Math.random() * TAU;
+        const tend = Math.random() < o.tendril;
+        const u = Math.random();
+        const sp = spd * (0.15 + u * u * (tend ? 1.6 : 0.95));
+        const seed = rBase * 0.25 * Math.random();
+        px[i] = x + Math.cos(a) * seed;
+        py[i] = y + Math.sin(a) * seed;
+        vx[i] = Math.cos(a) * sp;
+        vy[i] = Math.sin(a) * sp;
+        age[i] = 0;
+        ttl[i] = o.ttl0 + Math.random() * o.ttl1 * (tend ? 1.5 : 1);
+        rad[i] = rBase * (tend ? 0.55 : 1) * (0.7 + Math.random() * 0.6);
+        alp[i] = (tend ? o.alpha * 0.6 : o.alpha) * (0.7 + Math.random() * 0.6);
+        ink[i] = si;
+      }
+    }
+
+    const TAP  = { count: 150, spd: 0.82, rad: 0.045, ttl0: 4.2, ttl1: 2.6, alpha: 0.095, tendril: 0.22 };
+    const DBL  = { count: 210, spd: 0.72, rad: 0.058, ttl0: 5.5, ttl1: 3.2, alpha: 0.10,  tendril: 0.18 };
+    const IDLE = { count: 55,  spd: 0.32, rad: 0.052, ttl0: 6.0, ttl1: 3.0, alpha: 0.055, tendril: 0.32 };
+    const SEED = { count: 90,  spd: 0.50, rad: 0.050, ttl0: 5.5, ttl1: 3.2, alpha: 0.065, tendril: 0.30 };
+
+    let drag = null;
+    let nextIdle = 2.2;
+    let lastW = env.w || 320, lastH = env.h || 320;
+
+    // already blooming on first sight
+    bloom((env.w || 320) * 0.40, (env.h || 320) * 0.42, 0, SEED);
+    bloom((env.w || 320) * 0.63, (env.h || 320) * 0.60, 2, SEED);
+
+    return {
+      draw(t, dt) {
+        const W = env.w, H = env.h;
+        const invW = 1 / Math.max(1, W), invH = 1 / Math.max(1, H);
+        const S = Math.min(W, H);
+        lastW = W; lastH = H;
+
+        // stray drops keep the water alive while it's left alone
+        nextIdle -= dt;
+        if (nextIdle <= 0) {
+          inkCursor = (inkCursor + 1) % pick.length;
+          bloom(0.12 * W + Math.random() * 0.76 * W,
+                0.12 * H + Math.random() * 0.76 * H, inkCursor, IDLE);
+          nextIdle = 3.4 + Math.random() * 3.2;
+        }
+
+        // eddies fade over ~2s
+        for (let v = 0; v < MV; v++) if (vlife[v] > 0) {
+          vlife[v] -= dt * 0.5; if (vlife[v] < 0) vlife[v] = 0;
+        }
+
+        // ambient curl current (divergence-free sum of shear waves)
+        const p1 = t * 0.060, p2 = -t * 0.048 + 1.7, p3 = t * 0.075 + 4.0;
+        const amb = S * 0.006;
+        const decay = Math.pow(0.14, dt);   // ejection slowdown, same for all
+        const cap = 0.6 * S;                 // clamp any single-frame leap
+
+        // clear to a translucent veil, then build dye additively
+        g.globalCompositeOperation = 'source-over';
+        g.globalAlpha = 1;
+        g.fillStyle = veil;
+        g.fillRect(0, 0, W, H);
+        g.globalCompositeOperation = 'lighter';
+
+        for (let i = 0; i < N; i++) {
+          let ag = age[i];
+          if (ag >= ttl[i]) continue;         // dead slot
+          ag += dt; age[i] = ag;
+          if (ag >= ttl[i]) continue;         // just expired this frame
+
+          const nx = px[i] * invW, ny = py[i] * invH;
+          const c1 = Math.cos(2.6 * nx + 3.0 * ny + p1);
+          const c2 = Math.cos(-3.4 * nx + 2.2 * ny + p2);
+          const c3 = Math.cos(1.8 * nx - 3.6 * ny + p3);
+          let fx = (3.0 * c1 + 2.2 * c2 - 3.6 * c3) * amb;
+          let fy = (-2.6 * c1 + 3.4 * c2 - 1.8 * c3) * amb;
+
+          for (let v = 0; v < MV; v++) {
+            const lf = vlife[v];
+            if (lf <= 0) continue;
+            const dx = px[i] - vcx[v], dy = py[i] - vcy[v];
+            const r2 = dx * dx + dy * dy;
+            if (r2 > vcut[v]) continue;
+            const w = lf * Math.exp(-r2 * vinv[v]);
+            fx += w * (vstr[v] * -dy + vpx[v]);
+            fy += w * (vstr[v] * dx + vpy[v]);
+          }
+
+          let sx = (fx + vx[i]) * dt, sy = (fy + vy[i]) * dt;
+          const s2 = sx * sx + sy * sy;
+          if (s2 > cap * cap) { const sc = cap / Math.sqrt(s2 + 1e-6); sx *= sc; sy *= sc; }
+          px[i] += sx; py[i] += sy;
+          vx[i] *= decay; vy[i] *= decay;
+
+          const f = ag / ttl[i];
+          const fin = ag < 0.14 ? ag / 0.14 : 1;
+          let a = alp[i] * fin * Math.pow(1 - f, 1.25);
+          if (a > 0.004) {
+            const r = rad[i] * (0.55 + 1.7 * f);
+            g.globalAlpha = a > 1 ? 1 : a;
+            g.drawImage(sprites[ink[i]], px[i] - r, py[i] - r, r * 2, r * 2);
+          }
+        }
+
+        g.globalAlpha = 1;
+        g.globalCompositeOperation = 'source-over';
+      },
+
+      down(p) {
+        drag = { x: p.x, y: p.y, dx: 0, dy: 0, sign: Math.random() < 0.5 ? 1 : -1, sx: p.x, sy: p.y };
+        inkCursor = (inkCursor + 1) % pick.length;
+        bloom(p.x, p.y, inkCursor, TAP);
+      },
+
+      move(p) {
+        if (!p.held) return;
+        if (!drag) { drag = { x: p.x, y: p.y, dx: 0, dy: 0, sign: Math.random() < 0.5 ? 1 : -1, sx: p.x, sy: p.y }; return; }
+        const dx = p.x - drag.x, dy = p.y - drag.y;
+        const cross = drag.dx * dy - drag.dy * dx;
+        if (Math.abs(cross) > 4) drag.sign = cross > 0 ? 1 : -1;
+        drag.dx = dx; drag.dy = dy; drag.x = p.x; drag.y = p.y;
+        const S = Math.min(env.w || 300, env.h || 300);
+        if (Math.hypot(p.x - drag.sx, p.y - drag.sy) > 0.035 * S) {
+          const len = Math.hypot(dx, dy), il = 1 / (len + 1e-6);
+          const pmag = Math.min(760, len * 13);
+          addVortex(p.x, p.y, Math.min(5, len * 0.16) * drag.sign,
+                    dx * il * pmag, dy * il * pmag, 0.20 * S);
+          drag.sx = p.x; drag.sy = p.y;
+        }
+      },
+
+      up() { drag = null; },
+      leave() { drag = null; },
+
+      dbl(p) {
+        inkCursor = (inkCursor + 1) % pick.length;
+        bloom(p.x, p.y, inkCursor, DBL);
+        const S = Math.min(env.w || 300, env.h || 300);
+        addVortex(p.x, p.y, (Math.random() < 0.5 ? 1 : -1) * 3.5, 0, 0, 0.26 * S);
+      },
+
+      resize(w, h) {
+        const sx = w / (lastW + 1e-6), sy = h / (lastH + 1e-6);
+        if (isFinite(sx) && isFinite(sy) && sx > 0 && sy > 0) {
+          for (let i = 0; i < N; i++) { px[i] *= sx; py[i] *= sy; }
+          for (let v = 0; v < MV; v++) { vcx[v] *= sx; vcy[v] *= sy; }
+        }
+        lastW = w; lastH = h;
+      },
+    };
+  },
+});
+})();
+
 /* --- 33-interference.js --- */
 ;(() => {
 /* № 33 — Interference. Two point sources cast expanding waves across a ripple
@@ -7214,6 +7670,383 @@ F.register({
           S.ty = Math.max(-0.2, Math.min(1.2, S.ty));
         }
       },
+    };
+  },
+});
+})();
+
+/* --- 34-night-owl.js --- */
+;(() => {
+/* № 34 — Night owl. A round lilac-and-amber owl perched on a branch under a
+   few twinkling stars. Its big cream-and-amber eyes track your pointer, and
+   its head springily swivels and cocks to keep watching you — owls turn their
+   heads — foreshortening as it turns, then overshooting and settling back. It
+   blinks slow, breathes, and ruffles its feathers now and then. Dart in fast
+   or get too close and it startles: eyes wide, feathers puffed, a little hop,
+   then it settles and stares you down again. */
+F.register({
+  n: 34, id: 'night-owl', cat: 'critters',
+  title: 'Night owl', hint: 'Move around — the owl watches you',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const AMBER = inks[0], CORAL = inks[1], LILAC = inks[4], CREAM = inks[5];
+    const DARK = bg;                               // dark pupils
+    const AMBER_A = 'rgba(245,165,36,0.5)';        // muted branch / claws base
+    const CREAM_R = 'rgba(242,233,220,0.14)';      // moonlit rim light
+    const CREAM_G = 'rgba(242,233,220,0.92)';      // eye glint
+    const DARK_5 = 'rgba(20,16,13,0.5)';           // eye outline
+    const DARK_3 = 'rgba(20,16,13,0.30)';          // chest marks / feather grooves
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+    // ---- pointer ----
+    let px = 0, py = 0, ptr = false, haveP = false, ppx = 0, ppy = 0, wasNear = false;
+
+    // ---- springs { p: position, v: velocity } (ease toward target, overshoot) ----
+    const yaw = { p: 0, v: 0 }, tilt = { p: 0, v: 0 };            // head swivel / cock
+    const hx = { p: 0, v: 0 }, hy = { p: 0, v: 0 }, by = { p: 0, v: 0 }; // head drift + hop
+    const puff = { p: 0, v: 0 };                                  // feather puff
+    // pupils, stored as offsets in circular (un-foreshortened) eye space
+    const pup = [{ x: 0, y: 0, vx: 0, vy: 0 }, { x: 0, y: 0, vx: 0, vy: 0 }];
+
+    // ---- life timers ----
+    let startle = 0;
+    let blinkP = -1, blinkT = 1.3 + Math.random() * 2.2, reblink = 0;
+    let ruffleT = 3 + Math.random() * 3;
+    let microT = 1 + Math.random() * 2;
+    let miYaw = 0, miTilt = 0, miHx = 0, miHy = 0;                // idle micro-pose targets
+
+    // ---- stars: a few, normalized to the card, kept clear of the owl's head ----
+    const stars = [];
+    for (let i = 0; i < 5; i++) {
+      let x, y, tries = 0;
+      do { x = 0.07 + Math.random() * 0.86; y = 0.05 + Math.random() * 0.30; tries++; }
+      while (tries < 8 && x > 0.30 && x < 0.70 && y < 0.28);
+      stars.push({ x, y, s: 0.007 + Math.random() * 0.011,
+        ph: Math.random() * TAU, rate: 0.7 + Math.random() * 1.6,
+        amber: Math.random() < 0.25 });
+    }
+
+    // ---- head frame (written each frame before the head is drawn) ----
+    let _hx = 0, _hy = 0, _co = 1, _si = 0, _ti = 0;
+    function TW(lx, ly) { return [_hx + lx * _co - ly * _si, _hy + lx * _si + ly * _co]; }
+    function ell(lx, ly, r, rxs, fill) {          // foreshortened + tilted ellipse
+      const p = TW(lx, ly);
+      g.beginPath();
+      g.ellipse(p[0], p[1], Math.max(0.4, r * rxs), Math.max(0.4, r), _ti, 0, TAU);
+      g.fillStyle = fill; g.fill();
+    }
+    function triL(ax, ay, bx, by2, cx2, cy2, fill) {
+      const A = TW(ax, ay), B = TW(bx, by2), C = TW(cx2, cy2);
+      g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.lineTo(C[0], C[1]);
+      g.closePath(); g.fillStyle = fill; g.fill();
+    }
+    function sstep(s, target, k, c, dt, vmax) {    // semi-implicit damped spring
+      s.v += ((target - s.p) * k - s.v * c) * dt;
+      if (s.v > vmax) s.v = vmax; else if (s.v < -vmax) s.v = -vmax;
+      s.p += s.v * dt;
+    }
+
+    return {
+      draw(t, dt) {
+        const w = env.w, h = env.h, m = Math.min(w, h);
+        const cx = w * 0.5, cy = h * 0.5;
+        const R = m * 0.25, headR = m * 0.215;
+        const branchY = h * 0.82;
+
+        // ---- pointer speed (frame to frame; no clocks) ----
+        let spd = 0;
+        if (ptr && haveP) spd = Math.hypot(px - ppx, py - ppy) / Math.max(dt, 1e-3);
+        ppx = px; ppy = py; haveP = ptr;
+
+        // approximate face centre (world) for aim + proximity
+        const pvy0 = cy - R * 0.30 + by.p + hy.p;
+        const fcx = cx + hx.p + Math.sin(yaw.p) * headR * 0.5;
+        const fcy = pvy0 - R * 0.34;
+        const near = ptr ? Math.hypot(px - fcx, py - fcy) : 1e9;
+
+        // ---- startle: a fast sweep, or a fresh close approach ----
+        const isNear = ptr && near < headR * 0.82;
+        const isFast = ptr && spd > m * 4.2;
+        if ((isFast || (isNear && !wasNear)) && startle < 0.5) {
+          by.v -= m * 1.6; hy.v -= m * 1.0; puff.v += 5;          // hop + head jerk + puff
+          yaw.v += clamp((px - cx) / (w * 0.4), -1, 1) * 2.2;
+          tilt.v += (Math.random() - 0.5) * 1.2;
+          blinkP = -1; startle = 1;
+        }
+        wasNear = isNear;
+        startle *= Math.pow(0.09, dt);
+
+        // ---- blink (slow sweep, scheduled; paused while startled) ----
+        if (blinkP >= 0) {
+          blinkP += dt / 0.42;
+          if (blinkP >= 1) {
+            if (reblink > 0) { reblink--; blinkP = 0; }
+            else { blinkP = -1; blinkT = 2.4 + Math.random() * 3.4; }
+          }
+        } else {
+          blinkT -= dt;
+          if (blinkT <= 0 && startle < 0.3) { blinkP = 0; reblink = Math.random() < 0.16 ? 1 : 0; }
+        }
+
+        // ---- occasional feather ruffle ----
+        ruffleT -= dt;
+        if (ruffleT <= 0) {
+          puff.v += 3.0 + Math.random() * 1.6;
+          hx.v += (Math.random() - 0.5) * m * 1.0;
+          tilt.v += (Math.random() - 0.5) * 0.9;
+          ruffleT = 4.5 + Math.random() * 5;
+        }
+
+        // ---- idle micro head adjustments (little curious re-poses) ----
+        microT -= dt;
+        if (microT <= 0) {
+          miYaw = (Math.random() - 0.5) * 0.20;
+          miTilt = (Math.random() - 0.5) * 0.14;
+          miHx = (Math.random() - 0.5) * m * 0.02;
+          miHy = (Math.random() - 0.5) * m * 0.02;
+          microT = 1.4 + Math.random() * 2.4;
+        }
+
+        // ---- spring targets ----
+        let tYaw = miYaw + Math.sin(t * 0.35) * 0.05;             // gentle idle sway
+        let tTilt = miTilt + Math.sin(t * 0.6) * 0.03;
+        let tHx = miHx, tHy = miHy;
+        if (ptr) {
+          tYaw += clamp((px - cx) / (w * 0.40), -1, 1) * 1.2;      // swivel toward you
+          tTilt += clamp((px - cx) / (w * 0.55), -1, 1) * 0.16
+                 - clamp((py - fcy) / (h * 0.5), -1, 1) * 0.05;    // curious cock
+          tHx += clamp((px - cx) / (w * 0.5), -1, 1) * R * 0.05;
+          tHy += clamp((py - fcy) / (h * 0.5), -1, 1) * R * 0.10;
+        }
+        if (startle > 0.05) {                                     // frightened shiver
+          tTilt += Math.sin(t * 40) * 0.05 * startle;
+          tHx += Math.sin(t * 34) * m * 0.01 * startle;
+        }
+        sstep(yaw, tYaw, 90, 11, dt, 30); yaw.p = clamp(yaw.p, -1.3, 1.3);
+        sstep(tilt, tTilt, 95, 12, dt, 30); tilt.p = clamp(tilt.p, -1.0, 1.0);
+        sstep(hx, tHx, 70, 10, dt, m * 20);
+        sstep(hy, tHy, 70, 10, dt, m * 20);
+        sstep(by, 0, 120, 12, dt, m * 30); by.p = clamp(by.p, -R * 0.6, R * 0.3);
+        sstep(puff, startle * 0.5, 55, 9, dt, 60); puff.p = clamp(puff.p, 0, 1.4);
+
+        const breath = Math.sin(t * 1.5);
+        const puffAmt = puff.p;
+
+        // ============================ paint ============================
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        g.lineJoin = 'round'; g.lineCap = 'round';
+
+        // subtle crescent moon (a night marker, top corner)
+        g.globalAlpha = 0.8;
+        g.fillStyle = CREAM;
+        g.beginPath(); g.arc(w * 0.82, h * 0.15, m * 0.062, 0, TAU); g.fill();
+        g.fillStyle = bg;
+        g.beginPath(); g.arc(w * 0.82 + m * 0.026, h * 0.15 - m * 0.018, m * 0.06, 0, TAU); g.fill();
+        g.globalAlpha = 1;
+
+        // twinkling stars
+        for (const st of stars) {
+          const tw = 0.5 + 0.5 * Math.sin(t * st.rate + st.ph);
+          const X = st.x * w, Y = st.y * h, rad = st.s * m * (0.6 + 0.8 * tw);
+          g.globalAlpha = 0.18 + 0.6 * tw;
+          g.fillStyle = st.amber ? AMBER : CREAM;
+          g.beginPath();
+          for (let k = 0; k < 8; k++) {
+            const ang = k / 8 * TAU - Math.PI / 2, rr = (k % 2) ? rad * 0.34 : rad;
+            const X2 = X + rr * Math.cos(ang), Y2 = Y + rr * Math.sin(ang);
+            k ? g.lineTo(X2, Y2) : g.moveTo(X2, Y2);
+          }
+          g.closePath(); g.fill();
+        }
+        g.globalAlpha = 1;
+
+        // branch
+        g.strokeStyle = AMBER_A; g.lineWidth = m * 0.06;
+        g.beginPath(); g.moveTo(w * 0.05, branchY); g.lineTo(w * 0.95, branchY + m * 0.006); g.stroke();
+        g.strokeStyle = CREAM_R; g.lineWidth = m * 0.018;
+        g.beginPath(); g.moveTo(w * 0.12, branchY - m * 0.022); g.lineTo(w * 0.88, branchY - m * 0.022); g.stroke();
+        g.strokeStyle = AMBER_A; g.lineWidth = m * 0.028;
+        g.beginPath();
+        g.moveTo(w * 0.72, branchY);
+        g.quadraticCurveTo(w * 0.80, branchY - m * 0.09, w * 0.87, branchY - m * 0.13);
+        g.stroke();
+
+        // feet: legs + talons gripping the branch (lift a touch on the hop)
+        for (const s of [-1, 1]) {
+          const fx = cx + s * R * 0.34;
+          const legTop = cy + R * 0.70 + by.p;
+          g.strokeStyle = AMBER; g.lineWidth = m * 0.03;
+          g.beginPath(); g.moveTo(fx, legTop); g.lineTo(fx, branchY - m * 0.01); g.stroke();
+          g.strokeStyle = CORAL; g.lineWidth = m * 0.022;
+          for (const tt of [-1, 0, 1]) {
+            g.beginPath();
+            g.moveTo(fx, branchY - m * 0.02);
+            g.quadraticCurveTo(fx + tt * m * 0.03, branchY + m * 0.015, fx + tt * m * 0.045, branchY + m * 0.055);
+            g.stroke();
+          }
+        }
+
+        // ---- body: breathing egg with a puff ripple ----
+        const byy = cy + by.p;
+        g.fillStyle = LILAC;
+        g.beginPath();
+        const NB = 30;
+        for (let k = 0; k <= NB; k++) {
+          const a = k / NB * TAU;
+          const down = (Math.sin(a) + 1) * 0.5;               // wider toward the base
+          const rx = R * (0.80 + 0.12 * down);
+          const ry = R * (1.00 + 0.02 * breath);
+          const bump = 1 + puffAmt * 0.05 * Math.sin(9 * a + t * 3) + 0.02 * Math.sin(3 * a + t * 0.7);
+          const X = cx + rx * bump * Math.cos(a);
+          const Y = byy + ry * bump * Math.sin(a);
+          k ? g.lineTo(X, Y) : g.moveTo(X, Y);
+        }
+        g.closePath(); g.fill();
+        g.strokeStyle = CREAM_R; g.lineWidth = m * 0.02;
+        g.beginPath(); g.ellipse(cx, byy, R * 0.84, R * 1.0, 0, Math.PI * 1.06, Math.PI * 1.72); g.stroke();
+
+        // ---- wings: fold at the sides, flare on puff/startle ----
+        for (const s of [-1, 1]) {
+          const ang = s * (0.22 + puffAmt * 0.22 + startle * 0.16);
+          const wx = cx + s * R * 0.60, wy = byy + R * 0.02;
+          g.fillStyle = LILAC;
+          g.beginPath(); g.ellipse(wx, wy, R * 0.24, R * 0.56, ang, 0, TAU); g.fill();
+          g.strokeStyle = DARK_3; g.lineWidth = m * 0.012;
+          g.beginPath(); g.ellipse(wx, wy + R * 0.18, R * 0.19, R * 0.30, ang, 0, TAU); g.stroke();
+          g.strokeStyle = CREAM_R; g.lineWidth = m * 0.018;
+          g.beginPath(); g.ellipse(wx, wy, R * 0.24, R * 0.56, ang, Math.PI, Math.PI * 1.6); g.stroke();
+        }
+
+        // ---- belly patch + chest chevrons ----
+        g.fillStyle = AMBER;
+        g.beginPath(); g.ellipse(cx, byy + R * 0.28, R * 0.50, R * 0.60, 0, 0, TAU); g.fill();
+        g.strokeStyle = DARK_3; g.lineWidth = m * 0.013;
+        for (let i = 0; i < 3; i++) {
+          const yy = byy + R * 0.10 + i * R * 0.22;
+          g.beginPath();
+          g.moveTo(cx - R * 0.20, yy); g.lineTo(cx, yy + R * 0.10); g.lineTo(cx + R * 0.20, yy);
+          g.stroke();
+        }
+
+        // ============================ head ============================
+        _hx = cx + hx.p;
+        _hy = pvy0 + Math.sin(t * 1.5) * R * 0.01;
+        _ti = tilt.p; _co = Math.cos(_ti); _si = Math.sin(_ti);
+        const fsx = Math.max(0.34, Math.cos(yaw.p));       // horizontal foreshorten as it turns
+        const faceShift = Math.sin(yaw.p) * headR * 0.52;  // face slides toward the turn
+        const hcl = -R * 0.34;                             // head centre (head-local y)
+        const eyeR0 = headR * 0.46;                        // big, bold eyes
+        const eyeR = eyeR0 * (1 + startle * 0.16);         // widen when startled
+        const irisR = eyeR * 0.58;
+        const pupR = eyeR * 0.42 * (1 - startle * 0.10);
+        const eyeGap = eyeR0 * 1.04;
+        const eyeLY = hcl - headR * 0.03;
+        const beakLY = eyeLY + eyeR0 * 1.18;
+        const tuftLY = hcl - headR * 0.80;
+        const maxD = Math.max(1, eyeR - irisR - m * 0.004);
+
+        // back-of-head bump (peeks out on the far side when the head is turned)
+        if (Math.abs(faceShift) > headR * 0.08) {
+          ell(-faceShift * 0.7, hcl + headR * 0.04, headR * 0.82, 0.55 + 0.2 * fsx, LILAC);
+        }
+        // ear tufts (perk up when startled / ruffled)
+        const tuftH = headR * (0.5 + startle * 0.25 + puffAmt * 0.18);
+        for (const s of [-1, 1]) {
+          const bxr = faceShift * 0.5 + s * headR * 0.5;
+          triL(bxr - headR * 0.14, tuftLY, bxr + headR * 0.14, tuftLY,
+               bxr + s * headR * 0.09, tuftLY - tuftH, LILAC);
+        }
+        // head dome + rim light
+        ell(faceShift * 0.15, hcl, headR, 0.86 + 0.14 * fsx, LILAC);
+        {
+          const p = TW(faceShift * 0.15, hcl);
+          g.strokeStyle = CREAM_R; g.lineWidth = m * 0.02;
+          g.beginPath();
+          g.ellipse(p[0], p[1], headR * (0.86 + 0.14 * fsx), headR, _ti, Math.PI * 1.08, Math.PI * 1.7);
+          g.stroke();
+        }
+        // amber facial discs
+        for (const s of [-1, 1]) {
+          ell(faceShift + s * eyeGap * fsx, eyeLY, eyeR * 1.16, fsx, AMBER);
+        }
+        // brow ridges (lift when startled)
+        for (const s of [-1, 1]) {
+          const p = TW(faceShift + s * eyeGap * fsx, eyeLY - eyeR * 0.12 - startle * eyeR * 0.22);
+          g.strokeStyle = LILAC; g.lineWidth = m * 0.022;
+          g.beginPath();
+          g.ellipse(p[0], p[1], eyeR * 1.08 * fsx, eyeR, _ti, Math.PI * 1.12, Math.PI * 1.88);
+          g.stroke();
+        }
+        // cream sclera
+        for (const s of [-1, 1]) {
+          ell(faceShift + s * eyeGap * fsx, eyeLY, eyeR, fsx, CREAM);
+        }
+        // iris + pupil + glint (tracking), blink lid, outline
+        for (let i = 0; i < 2; i++) {
+          const s = i ? 1 : -1;
+          const elx = faceShift + s * eyeGap * fsx;
+          const ew = TW(elx, eyeLY);
+          const P = pup[i];
+          let tx, ty;
+          if (ptr) {                                        // aim toward pointer, in eye space
+            const ddx = px - ew[0], ddy = py - ew[1];
+            const lxp = (ddx * _co + ddy * _si) / fsx;      // un-tilt, un-foreshorten
+            const lyp = -ddx * _si + ddy * _co;
+            const dd = Math.hypot(lxp, lyp) + 1e-6;
+            const mag = Math.min(maxD, maxD * dd / (m * 0.42));
+            tx = lxp / dd * mag; ty = lyp / dd * mag;
+          } else {                                          // idle wander
+            tx = Math.sin(t * 0.5 + s) * eyeR * 0.12;
+            ty = Math.sin(t * 0.37 + s * 2) * eyeR * 0.10 + eyeR * 0.05;
+          }
+          P.vx += ((tx - P.x) * 140 - P.vx * 13) * dt;      // springy pupils (overshoot)
+          P.vy += ((ty - P.y) * 140 - P.vy * 13) * dt;
+          const vm = Math.hypot(P.vx, P.vy), vmax = m * 30;
+          if (vm > vmax) { P.vx *= vmax / vm; P.vy *= vmax / vm; }
+          P.x += P.vx * dt; P.y += P.vy * dt;
+          const pd = Math.hypot(P.x, P.y) + 1e-6;
+          if (pd > maxD) { P.x *= maxD / pd; P.y *= maxD / pd; }
+          const ilx = elx + P.x * fsx, ily = eyeLY + P.y;
+          ell(ilx, ily, irisR, fsx, AMBER);
+          ell(ilx, ily, pupR, fsx, DARK);
+          ell(ilx - eyeR * 0.13, ily - eyeR * 0.15, eyeR * 0.12, fsx, CREAM_G);
+          const lid = blinkP >= 0 ? Math.sin(Math.PI * Math.min(1, blinkP)) : 0;
+          if (lid > 0.001) {
+            g.save();
+            g.beginPath(); g.ellipse(ew[0], ew[1], eyeR * fsx, eyeR, _ti, 0, TAU); g.clip();
+            g.fillStyle = LILAC;
+            g.fillRect(ew[0] - eyeR - 2, ew[1] - eyeR - 2, (eyeR + 2) * 2, lid * 2 * eyeR + 2);
+            g.restore();
+          }
+          g.strokeStyle = DARK_5; g.lineWidth = Math.max(1.5, m * 0.006);
+          g.beginPath(); g.ellipse(ew[0], ew[1], eyeR * fsx, eyeR, _ti, 0, TAU); g.stroke();
+        }
+        // coral beak (opens a touch when startled)
+        {
+          const bw = eyeR0 * 0.34, openG = startle * eyeR0 * 0.16;
+          triL(faceShift - bw * fsx, beakLY, faceShift + bw * fsx, beakLY,
+               faceShift, beakLY + eyeR0 * 0.55, CORAL);
+          triL(faceShift - bw * 0.6 * fsx, beakLY + eyeR0 * 0.5 + openG,
+               faceShift + bw * 0.6 * fsx, beakLY + eyeR0 * 0.5 + openG,
+               faceShift, beakLY + eyeR0 * 0.85 + openG, CORAL);
+        }
+      },
+      down(p) {
+        const m = Math.min(env.w, env.h);
+        px = p.x; py = p.y; ptr = true;
+        startle = 1;                                        // poke = big startle + hop
+        by.v -= m * 1.9; hy.v -= m * 1.2; puff.v += 6.5;
+        yaw.v += clamp((px - env.w * 0.5) / (env.w * 0.4), -1, 1) * 3.2;
+        blinkP = -1;
+      },
+      move(p) { px = p.x; py = p.y; ptr = true; },
+      dbl(p) {                                              // curious head-roll + blink
+        px = p.x; py = p.y; ptr = true;
+        tilt.v += (px > env.w * 0.5 ? 1 : -1) * 7.0;
+        puff.v += 3; blinkP = 0;
+      },
+      leave() { ptr = false; haveP = false; wasNear = false; },
     };
   },
 });
@@ -7504,6 +8337,233 @@ F.register({
       },
       leave() { hasPtr = false; held = false; isDown = false; },
       resize() { build(); },
+    };
+  },
+});
+})();
+
+/* --- 36-pantograph.js --- */
+;(() => {
+/* № 36 — Pantograph. The hinged parallelogram arm that copies a drawing at a
+   larger scale. A fixed anchor pivot, a sky stylus you drag, and a mint pen
+   carried on the linkage that always traces pen = anchor + 1.7·(stylus − anchor):
+   collinear with the anchor, 1.7× as far out. The stylus rides at fraction 1/1.7
+   along one bar and the pen rides the opposite bar extended, so the parallelogram
+   flexes as a rigid four-bar. Left alone the stylus glides a slow looping path and
+   the pen keeps drawing; grab it and the big copy mirrors your small hand motion. */
+F.register({
+  n: 36, id: 'pantograph', cat: 'mech',
+  title: 'Pantograph', hint: 'Drag the stylus — the arm copies it',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const CREAM = inks[5], AMBER = inks[0], MINT = inks[2], SKY = inks[3];
+
+    // --- mechanism, in linkage units relative to the anchor O (the unit origin) ---
+    const RATIO = 1.7;            // pen enlargement: P = O + RATIO·(S − O)
+    const TT = 1 / RATIO;         // stylus sits at fraction TT along bar U→X
+    const LP = 1.0, LQ = 1.0;     // parallelogram side lengths (a rhombus)
+    const LA = LP, LB = TT * LQ;  // the two link lengths of the arm reaching the stylus
+    const RMIN = Math.abs(LA - LB) + 0.09;  // clamp the stylus reach safely inside the
+    const RMAX = (LA + LB) - 0.09;          // fully-folded / straight singular poses
+    const BRANCH = 1;             // fixed elbow branch — the arm never flips over
+
+    // stylus spring state (unit space) and its looping idle path
+    let sx, sy, svx = 0, svy = 0;
+    const CPHI = -0.85, CD = 1.0;                    // idle centre: up-and-right of O
+    const cx0 = CD * Math.cos(CPHI), cy0 = CD * Math.sin(CPHI);
+    sx = cx0 + 0.40; sy = cy0;                        // seed on the path: frame one is alive
+    let tgx = sx, tgy = sy;                           // spring target (unit space)
+    let dragging = false, offx = 0, offy = 0;         // grab offset in screen px
+
+    // --- capped trace ring buffers, allocated ONCE (stylus faint, pen bold) ---
+    const CAP = 240;
+    const styBuf = new Float64Array(CAP * 2);
+    const penBuf = new Float64Array(CAP * 2);
+    let head = 0, count = 0;
+    function pushTrace(ax, ay, bx, by) {
+      const i = head * 2;
+      styBuf[i] = ax; styBuf[i + 1] = ay;
+      penBuf[i] = bx; penBuf[i + 1] = by;
+      head = (head + 1) % CAP;
+      if (count < CAP) count++;
+    }
+
+    // solved joints (unit space), recomputed each frame
+    let Ux = 0, Uy = 0, Vx = 0, Vy = 0, Xx = 0, Xy = 0, Px = 0, Py = 0;
+    function solve() {
+      // keep the stylus in the reachable annulus so the four-bar can never invert
+      let d = Math.hypot(sx, sy) + 1e-6;
+      if (d < RMIN) { const k = RMIN / d; sx *= k; sy *= k; d = RMIN; }
+      else if (d > RMAX) { const k = RMAX / d; sx *= k; sy *= k; d = RMAX; }
+      // elbow U = circle(O, LA) ∩ circle(S, LB), one fixed branch
+      const A = (LA * LA - LB * LB + d * d) / (2 * d);
+      const H = Math.sqrt(Math.max(0, LA * LA - A * A));
+      const nx = sx / d, ny = sy / d;                 // unit O→S
+      Ux = A * nx - BRANCH * H * ny;
+      Uy = A * ny + BRANCH * H * nx;
+      // close the parallelogram: q = (S − U)/TT, then X = U + q and V = O + q
+      const qx = (sx - Ux) / TT, qy = (sy - Uy) / TT;
+      Vx = qx; Vy = qy;
+      Xx = Ux + qx; Xy = Uy + qy;
+      // the pen is the guaranteed-collinear enlargement of the stylus
+      Px = RATIO * sx; Py = RATIO * sy;
+    }
+
+    // screen mapping, refreshed each frame from live env.w/env.h (rescales on resize)
+    let Ox = 0, Oy = 0, sc = 1;
+    function frame() {
+      const w = env.w, h = env.h, m = Math.max(1, Math.min(w, h));
+      sc = 0.30 * m;
+      Ox = 0.29 * w; Oy = 0.72 * h;
+    }
+    function SX(u) { return Ox + u * sc; }
+    function SY(u) { return Oy + u * sc; }
+
+    function drawTrail(buf, col, wMax, aMax) {
+      if (count < 2) return;
+      g.strokeStyle = col; g.lineCap = 'round'; g.lineJoin = 'round';
+      const BANDS = 10, last = count - 1;
+      for (let b = 0; b < BANDS; b++) {              // banded so the tail fades toward the tip
+        const k0 = Math.floor(b * last / BANDS);
+        const k1 = Math.floor((b + 1) * last / BANDS);
+        if (k1 <= k0) continue;
+        const f = (b + 1) / BANDS;
+        g.globalAlpha = aMax * f * f;
+        g.lineWidth = wMax * (0.35 + 0.65 * f);
+        g.beginPath();
+        for (let k = k0; k <= k1; k++) {
+          const idx = ((head - count + k) % CAP + CAP) % CAP;
+          const X = SX(buf[idx * 2]), Y = SY(buf[idx * 2 + 1]);
+          if (k === k0) g.moveTo(X, Y); else g.lineTo(X, Y);
+        }
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
+
+    function pivot(ux, uy, r) {                       // amber pin with a dark seat
+      const X = SX(ux), Y = SY(uy);
+      g.fillStyle = bg; g.beginPath(); g.arc(X, Y, r + 1.5, 0, TAU); g.fill();
+      g.fillStyle = AMBER; g.beginPath(); g.arc(X, Y, r, 0, TAU); g.fill();
+    }
+
+    function setTarget(p) {                           // screen pointer → clamped unit target
+      frame();
+      let ux = (p.x + offx - Ox) / sc, uy = (p.y + offy - Oy) / sc;
+      const d = Math.hypot(ux, uy) + 1e-6;
+      if (d < RMIN) { const k = RMIN / d; ux *= k; uy *= k; }
+      else if (d > RMAX) { const k = RMAX / d; ux *= k; uy *= k; }
+      tgx = ux; tgy = uy;
+    }
+
+    return {
+      draw(t, dt) {
+        frame();
+        const w = env.w, h = env.h;
+
+        // target: the slow looping idle path, or the dragged pointer
+        if (!dragging) {
+          const th = 0.50 * t, rot = 0.12 * t;
+          const ex = 0.40 * Math.cos(th), ey = 0.30 * Math.sin(th);
+          const cr = Math.cos(rot), sr = Math.sin(rot);   // precess the ellipse into a rosette
+          tgx = cx0 + (ex * cr - ey * sr);
+          tgy = cy0 + (ex * sr + ey * cr);
+        }
+        // spring the stylus toward the target — slightly underdamped for mechanical lag
+        const K = 80, C = 10.7;                            // C ≈ 2·√K·0.6
+        svx += (K * (tgx - sx) - C * svx) * dt;
+        svy += (K * (tgy - sy) - C * svy) * dt;
+        const vm = Math.hypot(svx, svy);
+        if (vm > 26) { const s = 26 / vm; svx *= s; svy *= s; }
+        sx += svx * dt; sy += svy * dt;
+
+        solve();
+        pushTrace(sx, sy, Px, Py);
+
+        // --- paint: whole card from bg, then traces, then the linkage on top ---
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+
+        drawTrail(styBuf, SKY, Math.max(1.3, sc * 0.022), 0.34);   // faint small original
+        drawTrail(penBuf, MINT, Math.max(2.4, sc * 0.038), 0.9);   // bold enlarged copy
+
+        // rods: the parallelogram O-U-X-V plus the V-X bar extended through X to the pen
+        const rod = Math.max(3, sc * 0.05);
+        g.lineCap = 'round'; g.lineJoin = 'round';
+        g.strokeStyle = CREAM; g.lineWidth = rod;
+        g.beginPath();
+        g.moveTo(SX(0), SY(0));
+        g.lineTo(SX(Ux), SY(Uy));
+        g.lineTo(SX(Xx), SY(Xy));
+        g.lineTo(SX(Vx), SY(Vy));
+        g.closePath();
+        g.moveTo(SX(Xx), SY(Xy));
+        g.lineTo(SX(Px), SY(Py));
+        g.stroke();
+
+        const pr = Math.max(2.5, sc * 0.038);
+        pivot(Ux, Uy, pr); pivot(Vx, Vy, pr); pivot(Xx, Xy, pr);
+
+        // pen tip (mint) — the drawing point, with a soft glow
+        const penX = SX(Px), penY = SY(Py);
+        g.globalAlpha = 0.18; g.fillStyle = MINT;
+        g.beginPath(); g.arc(penX, penY, pr * 3.2, 0, TAU); g.fill();
+        g.globalAlpha = 1;
+        g.fillStyle = bg; g.beginPath(); g.arc(penX, penY, pr * 1.7 + 1.5, 0, TAU); g.fill();
+        g.fillStyle = MINT; g.beginPath(); g.arc(penX, penY, pr * 1.7, 0, TAU); g.fill();
+
+        // stylus handle (sky) — the grab affordance; pulses at idle, flares while held
+        const stX = SX(sx), stY = SY(sy);
+        if (!dragging) {
+          const pulse = pr * (2.1 + 0.6 * (0.5 + 0.5 * Math.sin(t * 2.4)));
+          g.globalAlpha = 0.28; g.strokeStyle = SKY;
+          g.lineWidth = Math.max(1.5, sc * 0.02);
+          g.beginPath(); g.arc(stX, stY, pulse, 0, TAU); g.stroke();
+          g.globalAlpha = 1;
+        } else {
+          g.globalAlpha = 0.5; g.fillStyle = SKY;
+          g.beginPath(); g.arc(stX, stY, pr * 3, 0, TAU); g.fill();
+          g.globalAlpha = 1;
+        }
+        g.fillStyle = bg; g.beginPath(); g.arc(stX, stY, pr * 1.6 + 1.5, 0, TAU); g.fill();
+        g.strokeStyle = SKY; g.lineWidth = Math.max(2, sc * 0.03);
+        g.beginPath(); g.arc(stX, stY, pr * 1.6, 0, TAU); g.stroke();
+        g.fillStyle = SKY; g.beginPath(); g.arc(stX, stY, pr * 0.7, 0, TAU); g.fill();
+
+        // anchor (fixed): a hatched ground plus a bold ringed amber pivot that never moves
+        const gx = SX(0), gy = SY(0), hw = Math.max(9, sc * 0.16);
+        g.globalAlpha = 0.5; g.strokeStyle = CREAM;
+        g.lineWidth = Math.max(1.5, sc * 0.02); g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(gx - hw, gy + pr * 1.6); g.lineTo(gx + hw, gy + pr * 1.6);
+        for (let i = -2; i <= 2; i++) {
+          const bx = gx + i * (hw / 2.4);
+          g.moveTo(bx, gy + pr * 1.6); g.lineTo(bx - hw * 0.28, gy + pr * 1.6 + hw * 0.42);
+        }
+        g.stroke(); g.globalAlpha = 1;
+        g.fillStyle = bg; g.beginPath(); g.arc(gx, gy, pr * 1.9 + 1.6, 0, TAU); g.fill();
+        g.strokeStyle = AMBER; g.lineWidth = Math.max(2, sc * 0.03);
+        g.beginPath(); g.arc(gx, gy, pr * 1.9, 0, TAU); g.stroke();
+        g.fillStyle = AMBER; g.beginPath(); g.arc(gx, gy, pr * 0.9, 0, TAU); g.fill();
+      },
+
+      down(p) {
+        frame();
+        dragging = true;
+        // grab the stylus if the press lands near it; otherwise summon it to the finger
+        const dx = (Ox + sx * sc) - p.x, dy = (Oy + sy * sc) - p.y;
+        const grabR = Math.max(22, 0.14 * Math.min(env.w, env.h));
+        if (Math.hypot(dx, dy) < grabR) { offx = dx; offy = dy; }
+        else { offx = 0; offy = 0; }
+        setTarget(p);
+      },
+      move(p) {
+        if (!dragging || !p.held) return;
+        setTarget(p);
+      },
+      up() {
+        dragging = false;
+      },
     };
   },
 });
@@ -8099,6 +9159,992 @@ F.register({
 });
 })();
 
+/* --- 40-whack-mole.js --- */
+;(() => {
+/* № 40 — Whack-a-mole. A 3×3 board of dirt holes with raised cream lips. Amber
+   moles spring up on their own, linger a beat, then duck back down — bonk a
+   raised one with the mallet that tracks your pointer and it squashes flat, sees
+   spinning stars, and drops home. Miss, and the mallet just whiffs the dirt.
+   Everything is springs and squash & stretch; the board keeps its own tally. */
+F.register({
+  n: 40, id: 'whack-mole', cat: 'chaos',
+  title: 'Whack-a-mole', hint: 'Bonk the moles as they pop up',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const AMBER = inks[0], CORAL = inks[1], SKY = inks[3], CREAM = inks[5];
+    const PIT = 'rgba(8,6,4,0.72)';     // hole shadow — a darkening of the ground
+    const DIRT = 'rgba(8,6,4,0.5)';
+    const DARK = 'rgba(20,16,13,';      // outline ink (ground) — append "a)"
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+    const N = 9;
+    const holes = [];
+    for (let i = 0; i < N; i++) {
+      holes.push({
+        target: 0, pop: 0, pv: 0,   // emerge: target 0/1, position (spring), velocity
+        linger: 0,                  // seconds left showing before it ducks on its own
+        bonk: 0,                    // 1 at the moment of a bonk → decays to 0 (also the daze)
+        flash: 0,                   // expanding hit-ring
+        spin: Math.random() * TAU,  // star / idle-sway phase
+        blink: 2 + Math.random() * 4,
+      });
+    }
+    let spawnTimer = 0.3, score = 0;
+
+    // mallet — eased pointer follow, springy swing, drifts to an idle home when the
+    // pointer leaves so the card never goes dead.
+    let tx = env.w * 0.84, ty = env.h * 0.86;
+    let hx = tx, hy = ty, swing = 0, swingV = 0, homing = true;
+
+    function metrics() {
+      const w = env.w, h = env.h, m = Math.min(w, h);
+      const rx = m * 0.12, ry = rx * 0.52;
+      return {
+        w, h, m, rx, ry,
+        Rox: rx * 1.3, Roy: ry * 1.34,     // raised outer lip
+        br: rx * 0.82,                     // mole body radius
+      };
+    }
+    const hX = (M, i) => M.w * (0.2 + 0.3 * (i % 3));
+    const hY = (M, i) => M.h * (0.2 + 0.3 * ((i / 3) | 0));
+    function moleY(M, o, i) {
+      const pe = clamp(o.pop, -0.15, 1.2);
+      const y = hY(M, i);
+      const base = y + M.br * 1.85;        // fully down: hidden below the front lip
+      const top = y - M.br * 0.45;         // fully up: poking well above the rim
+      return base + (top - base) * pe;
+    }
+
+    function spawn() {
+      let pick = -1, seen = 0;
+      for (let i = 0; i < N; i++) {         // reservoir-pick a random idle hole
+        const o = holes[i];
+        if (o.target === 0 && o.pop < 0.2 && o.bonk <= 0) { seen++; if (Math.random() < 1 / seen) pick = i; }
+      }
+      if (pick < 0) return;
+      const o = holes[pick];
+      o.target = 1;
+      o.linger = 0.75 + Math.random() * 1.0;
+      o.pv = 5.5 + Math.random() * 3;       // launch kick for a springy emerge
+    }
+    // pre-pop two so the board is alive on the very first frame
+    holes[4].target = 1; holes[4].linger = 1.5; holes[4].pop = 0.15; holes[4].pv = 6;
+    holes[7].target = 1; holes[7].linger = 2.2; holes[7].pop = 0.05; holes[7].pv = 5;
+
+    function hit(px, py) {
+      const M = metrics();
+      let best = -1, bd = 1e9;
+      for (let i = 0; i < N; i++) {
+        const o = holes[i];
+        if (o.bonk > 0 || clamp(o.pop, -0.15, 1.2) < 0.45) continue;  // only a raised mole
+        const dx = px - hX(M, i), dy = py - moleY(M, o, i);
+        const d = dx * dx + dy * dy, r = M.br * 1.45;
+        if (d < r * r && d < bd) { bd = d; best = i; }
+      }
+      return best;
+    }
+
+    function rr(x, y, w, h, r) {
+      r = Math.min(r, w * 0.5, h * 0.5);
+      g.beginPath();
+      g.moveTo(x + r, y);
+      g.arcTo(x + w, y, x + w, y + h, r);
+      g.arcTo(x + w, y + h, x, y + h, r);
+      g.arcTo(x, y + h, x, y, r);
+      g.arcTo(x, y, x + w, y, r);
+      g.closePath();
+    }
+    function sparkle(x, y, r, rot, col, a) {
+      g.save();
+      g.translate(x, y); g.rotate(rot);
+      g.globalAlpha = clamp(a, 0, 1);
+      g.fillStyle = col;
+      g.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const o = k * Math.PI / 2, o2 = o + Math.PI / 4;
+        g.lineTo(Math.cos(o) * r, Math.sin(o) * r);
+        g.lineTo(Math.cos(o2) * r * 0.38, Math.sin(o2) * r * 0.38);
+      }
+      g.closePath(); g.fill();
+      g.globalAlpha = 1;
+      g.restore();
+    }
+
+    // pit + the far (back) half of the raised cream lip — drawn behind the mole
+    function pitBack(M, i) {
+      const x = hX(M, i), y = hY(M, i);
+      g.fillStyle = PIT;
+      g.beginPath(); g.ellipse(x, y, M.rx, M.ry, 0, 0, TAU); g.fill();
+      g.fillStyle = DIRT;
+      g.beginPath(); g.ellipse(x, y + M.ry * 0.3, M.rx * 0.8, M.ry * 0.55, 0, 0, TAU); g.fill();
+      g.save();
+      g.beginPath(); g.rect(x - M.Rox - 2, y - M.Roy - 2, (M.Rox + 2) * 2, M.Roy + 2); g.clip();
+      g.beginPath();
+      g.ellipse(x, y, M.Rox, M.Roy, 0, 0, TAU);
+      g.ellipse(x, y, M.rx, M.ry, 0, 0, TAU);
+      g.fillStyle = 'rgba(242,233,220,0.5)';
+      g.fill('evenodd');
+      g.restore();
+    }
+
+    // near (front) half of the lip — drawn over the mole's base to seat it in the hole
+    function lipFront(M, i) {
+      const x = hX(M, i), y = hY(M, i);
+      g.save();
+      g.beginPath(); g.rect(x - M.Rox - 2, y, (M.Rox + 2) * 2, M.Roy + 3); g.clip();
+      g.beginPath();
+      g.ellipse(x, y, M.Rox, M.Roy, 0, 0, TAU);
+      g.ellipse(x, y, M.rx, M.ry, 0, 0, TAU);
+      g.fillStyle = CREAM;
+      g.fill('evenodd');
+      g.restore();
+      g.strokeStyle = DARK + '0.26)';
+      g.lineWidth = Math.max(1.5, M.rx * 0.06);
+      g.beginPath(); g.ellipse(x, y, M.rx, M.ry, 0, Math.PI * 0.1, Math.PI * 0.9); g.stroke();
+    }
+
+    function drawMole(M, o, cx, my) {
+      const R = M.br;
+      const st = clamp(o.pv * 0.016, -0.32, 0.42);         // stretch tall while shooting up
+      let sx = 1 - st * 0.5 + o.bonk * 0.85;               // flatten wide on a bonk
+      let sy = 1 + st - o.bonk * 0.66;
+      sx = clamp(sx, 0.55, 1.95); sy = clamp(sy, 0.28, 1.5);
+      const dazed = o.bonk > 0.05, blink = o.blink < 0 && !dazed;
+      g.save();
+      g.translate(cx + Math.sin(o.spin * 0.5) * R * 0.05 * clamp(o.pop, 0, 1), my);
+      g.scale(sx, sy);
+      // ears (behind body)
+      g.fillStyle = AMBER;
+      g.beginPath(); g.ellipse(-R * 0.56, -R * 0.98, R * 0.31, R * 0.33, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(R * 0.56, -R * 0.98, R * 0.31, R * 0.33, 0, 0, TAU); g.fill();
+      // body
+      g.fillStyle = AMBER;
+      g.beginPath(); g.ellipse(0, 0, R, R * 1.06, 0, 0, TAU); g.fill();
+      g.lineWidth = Math.max(2, R * 0.09); g.strokeStyle = DARK + '0.4)'; g.stroke();
+      // inner-ear coral on the poking tips
+      g.fillStyle = 'rgba(242,102,91,0.6)';
+      g.beginPath(); g.ellipse(-R * 0.56, -R * 1.1, R * 0.13, R * 0.14, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(R * 0.56, -R * 1.1, R * 0.13, R * 0.14, 0, 0, TAU); g.fill();
+      // cream muzzle
+      g.fillStyle = 'rgba(242,233,220,0.94)';
+      g.beginPath(); g.ellipse(0, R * 0.3, R * 0.6, R * 0.62, 0, 0, TAU); g.fill();
+      // cheeks
+      g.fillStyle = 'rgba(242,102,91,0.4)';
+      g.beginPath(); g.ellipse(-R * 0.52, R * 0.12, R * 0.19, R * 0.14, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(R * 0.52, R * 0.12, R * 0.19, R * 0.14, 0, 0, TAU); g.fill();
+      // eyes
+      const ex = R * 0.32, ey = -R * 0.14;
+      if (dazed) {
+        g.strokeStyle = DARK + '0.85)'; g.lineWidth = Math.max(2, R * 0.1); g.lineCap = 'round';
+        for (let s = -1; s <= 1; s += 2) {
+          g.beginPath();
+          g.moveTo(s * ex - R * 0.12, ey - R * 0.12); g.lineTo(s * ex + R * 0.12, ey + R * 0.12);
+          g.moveTo(s * ex + R * 0.12, ey - R * 0.12); g.lineTo(s * ex - R * 0.12, ey + R * 0.12);
+          g.stroke();
+        }
+      } else if (blink) {
+        g.strokeStyle = DARK + '0.85)'; g.lineWidth = Math.max(2, R * 0.09); g.lineCap = 'round';
+        for (let s = -1; s <= 1; s += 2) {
+          g.beginPath(); g.moveTo(s * ex - R * 0.13, ey); g.lineTo(s * ex + R * 0.13, ey); g.stroke();
+        }
+      } else {
+        g.fillStyle = DARK + '0.9)';
+        g.beginPath(); g.ellipse(-ex, ey, R * 0.14, R * 0.17, 0, 0, TAU); g.fill();
+        g.beginPath(); g.ellipse(ex, ey, R * 0.14, R * 0.17, 0, 0, TAU); g.fill();
+        g.fillStyle = 'rgba(242,233,220,0.9)';
+        g.beginPath(); g.arc(-ex + R * 0.05, ey - R * 0.06, R * 0.045, 0, TAU); g.fill();
+        g.beginPath(); g.arc(ex + R * 0.05, ey - R * 0.06, R * 0.045, 0, TAU); g.fill();
+      }
+      // nose
+      g.fillStyle = CORAL;
+      g.beginPath(); g.ellipse(0, R * 0.16, R * 0.19, R * 0.15, 0, 0, TAU); g.fill();
+      g.fillStyle = 'rgba(242,233,220,0.7)';
+      g.beginPath(); g.arc(-R * 0.06, R * 0.11, R * 0.05, 0, TAU); g.fill();
+      // mouth
+      g.strokeStyle = DARK + '0.55)'; g.lineWidth = Math.max(1.5, R * 0.055); g.lineCap = 'round';
+      if (dazed) {
+        g.beginPath(); g.ellipse(0, R * 0.46, R * 0.11, R * 0.12, 0, 0, TAU); g.stroke();
+      } else {
+        g.beginPath(); g.arc(0, R * 0.32, R * 0.16, 0.18 * Math.PI, 0.82 * Math.PI); g.stroke();
+      }
+      // whiskers
+      g.strokeStyle = 'rgba(242,233,220,0.4)'; g.lineWidth = Math.max(1.5, R * 0.04);
+      for (let s = -1; s <= 1; s += 2) {
+        g.beginPath();
+        g.moveTo(s * R * 0.18, R * 0.18); g.lineTo(s * R * 0.6, R * 0.1);
+        g.moveTo(s * R * 0.18, R * 0.24); g.lineTo(s * R * 0.62, R * 0.28);
+        g.stroke();
+      }
+      g.restore();
+    }
+
+    function drawHammer(M, t) {
+      const m = M.m;
+      const dx = m * 0.13, dy = m * 0.17;
+      const px = hx - dx, py = hy - dy;          // hand pivot, up-left of the cursor
+      const HL = Math.hypot(dx, dy);              // head reaches the cursor at full strike
+      const phiS = Math.atan2(dy, dx);
+      const bob = homing ? Math.sin(t * 2.4) * 0.06 : 0;
+      const phi = (phiS - 0.8) + swing * 0.8 + bob;   // cocked back at rest → swung down struck
+      const th = m * 0.1, ln = m * 0.19, hw = m * 0.05;
+      g.save();
+      g.translate(px, py);
+      g.rotate(phi);
+      g.lineCap = 'round';
+      g.strokeStyle = SKY; g.lineWidth = hw;
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(HL * 0.92, 0); g.stroke();
+      g.strokeStyle = AMBER; g.lineWidth = hw * 0.86;      // grip wrap near the hand
+      g.beginPath(); g.moveTo(hw * 0.5, 0); g.lineTo(HL * 0.34, 0); g.stroke();
+      g.fillStyle = SKY; g.beginPath(); g.arc(0, 0, hw * 0.6, 0, TAU); g.fill();
+      g.translate(HL, 0);                                   // the mallet head
+      g.fillStyle = CREAM; rr(-th / 2, -ln / 2, th, ln, th * 0.36); g.fill();
+      g.fillStyle = 'rgba(245,165,36,0.85)'; rr(th * 0.14, -ln / 2, th * 0.36, ln, th * 0.16); g.fill();
+      g.strokeStyle = DARK + '0.34)'; g.lineWidth = Math.max(1.5, m * 0.006);
+      rr(-th / 2, -ln / 2, th, ln, th * 0.36); g.stroke();
+      g.restore();
+    }
+
+    return {
+      draw(t, dt) {
+        const M = metrics();
+
+        // mallet: eased follow + swing spring
+        const kf = Math.min(1, dt * 20);
+        hx += (tx - hx) * kf; hy += (ty - hy) * kf;
+        swingV += (-swing * 240 - swingV * 16) * dt;
+        swingV = clamp(swingV, -60, 60);
+        swing = clamp(swing + swingV * dt, -0.5, 1.7);
+
+        // scheduler: keep the board popping, capped so it stays whack-able
+        let up = 0;
+        for (let i = 0; i < N; i++) if (holes[i].target === 1) up++;
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          if (up < 3) spawn();
+          spawnTimer = 0.45 + Math.random() * 0.85;
+        }
+
+        // advance each mole
+        for (let i = 0; i < N; i++) {
+          const o = holes[i];
+          if (o.bonk > 0) o.bonk = Math.max(0, o.bonk - dt / 0.55);
+          if (o.target === 1 && o.pop > 0.6) { o.linger -= dt; if (o.linger <= 0) o.target = 0; }
+          const acc = (o.target - o.pop) * 205 - o.pv * 15;   // springy pop / duck
+          o.pv = clamp(o.pv + acc * dt, -32, 32);
+          o.pop = clamp(o.pop + o.pv * dt, -0.3, 1.2);
+          o.spin += dt * 7;
+          o.blink -= dt; if (o.blink < -0.13) o.blink = 2.4 + Math.random() * 3.6;
+          if (o.flash > 0) o.flash -= dt / 0.24;
+        }
+
+        // ---- paint, back to front ----
+        g.fillStyle = bg; g.fillRect(0, 0, M.w, M.h);
+        g.lineJoin = 'round'; g.lineCap = 'round';
+
+        for (let i = 0; i < N; i++) pitBack(M, i);
+
+        // moles, each clipped to (its column above the hole ∪ the hole opening) so a
+        // squashed bonk can never spill onto the dirt or a neighbour
+        for (let i = 0; i < N; i++) {
+          const o = holes[i];
+          if (o.pop < 0.02 && o.bonk <= 0) continue;
+          const x = hX(M, i), y = hY(M, i);
+          g.save();
+          g.beginPath();
+          g.rect(x - M.rx * 1.22, y - M.br * 3, M.rx * 2.44, M.br * 3);
+          g.ellipse(x, y, M.rx * 0.99, M.ry * 0.99, 0, 0, TAU);
+          g.clip();
+          drawMole(M, o, x, moleY(M, o, i));
+          g.restore();
+        }
+
+        for (let i = 0; i < N; i++) lipFront(M, i);
+
+        // flashes + dazed stars, on top and unclipped so they read cleanly
+        for (let i = 0; i < N; i++) {
+          const o = holes[i];
+          const x = hX(M, i), y = hY(M, i);
+          if (o.flash > 0) {
+            const f = clamp(o.flash, 0, 1);
+            g.strokeStyle = 'rgba(242,233,220,' + (f * 0.8).toFixed(3) + ')';
+            g.lineWidth = 1.5 + 4 * f;
+            g.beginPath(); g.arc(x, y - M.br * 0.5, M.br * (0.5 + (1 - f) * 1.5), 0, TAU); g.stroke();
+          }
+          if (o.bonk > 0.06) {
+            const a = o.bonk, cyS = y - M.br * 0.8, orb = M.br * 0.95;
+            for (let s = 0; s < 3; s++) {
+              const ang = o.spin + s * TAU / 3;
+              sparkle(x + Math.cos(ang) * orb, cyS + Math.sin(ang) * orb * 0.5,
+                      M.br * 0.24 * (0.6 + 0.4 * a), o.spin * 1.6 + s, s === 1 ? CREAM : AMBER, 0.5 + 0.5 * a);
+            }
+          }
+        }
+
+        // tally + mallet on top
+        const pad = Math.max(8, M.m * 0.05);
+        sparkle(pad + M.m * 0.018, pad + M.m * 0.02, M.m * 0.022, -0.3, AMBER, 0.9);
+        g.fillStyle = 'rgba(242,233,220,0.85)';
+        g.font = '700 ' + Math.max(12, Math.round(M.m * 0.055)) + 'px ui-monospace, Menlo, monospace';
+        g.textBaseline = 'middle'; g.textAlign = 'left';
+        g.fillText(String(score), pad + M.m * 0.05, pad + M.m * 0.02);
+
+        drawHammer(M, t);
+      },
+      down(p) {
+        tx = p.x; ty = p.y; homing = false;
+        const i = hit(p.x, p.y);
+        if (i >= 0) {
+          const o = holes[i];
+          o.bonk = 1; o.target = 0; o.linger = 0; o.pv = -7;  // squash flat & slam it home
+          o.spin = Math.random() * TAU; o.flash = 1;
+          score++;
+          swingV = 22;                                        // a hard whack
+        } else {
+          swingV = 14;                                        // a whiff
+        }
+      },
+      move(p) { tx = p.x; ty = p.y; homing = false; },
+      leave() { homing = true; tx = env.w * 0.84; ty = env.h * 0.86; },
+    };
+  },
+});
+})();
+
+/* --- 41-metronome.js --- */
+;(() => {
+/* № 41 — Metronome. A wind-up Maelzel metronome: an amber pyramid with an
+   inverted-pendulum rod, a coral sliding weight, and a faint tempo scale.
+   It ticks side to side on its own, lingering a hair at each extreme (a crisp
+   flash + a scale-mark pulse marks the beat). Drag the weight UP the rod to
+   slow it, DOWN to race it — same reason as the real device: it lengthens the
+   effective pendulum. Shove the rod itself to push or restart the swing; the
+   body rocks a touch against every beat. */
+F.register({
+  n: 41, id: 'metronome', cat: 'mech',
+  title: 'Metronome', hint: 'Drag the weight to set the tempo',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const AMBER = inks[0], CORAL = inks[1], CREAM = inks[5];
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+    // ---- tunables ----
+    const Q = 1.5;                        // >1 = linger (hesitate) at the extremes
+    const BPM_FAST = 168, BPM_SLOW = 40;  // weight low = fast, weight high = slow
+    const F_MIN = 0.40, F_MAX = 0.86;     // weight travel along rod (0 = pivot, 1 = tip)
+    const IDLE_AMP = 0.44, MAX_AMP = 0.92;
+    const GRADS = 9;
+
+    // ---- state ----
+    let phase = 0;                        // beat phase; extremes at pi/2 + k*pi
+    let omega = Math.PI * 107 / 60;       // current angular tempo (eased)
+    let lastN = -1;                       // last extreme index crossed
+    let amp = IDLE_AMP;                   // current swing amplitude (rad)
+    let f = 0.62, fShown = 0.62;          // weight fraction: target / eased-shown
+    let armAngle = 0;                     // rendered arm angle from vertical (+ = right)
+    let rock = 0;                         // body reaction rock (eased)
+    let flash = 0, flashX = 0, flashY = 0;// tick flash intensity + world spot
+    let pulse = 0;                        // slow idle breath for the grab affordance
+    let dragArm = false, dragWt = false, dragV = 0;
+    let hx = -999, hy = -999;             // hover point (body-local, pre-rock)
+
+    // ---- layout (recomputed every frame from live env.w/env.h) ----
+    let cx, topY, baseY, bodyH, halfTop, halfBot, pivotX, pivotY, L, wr, rodW, mm;
+    function layout() {
+      const w = env.w, h = env.h; mm = Math.min(w, h);
+      cx = w * 0.5;
+      topY = h * 0.125; baseY = h * 0.92; bodyH = baseY - topY;
+      halfBot = Math.min(w * 0.31, 0.34 * mm);
+      halfTop = halfBot * 0.30;
+      pivotX = cx; pivotY = topY + bodyH * 0.88;       // pivot sits low, near the base
+      L = pivotY - (topY - 0.045 * h);                 // rod pokes just out the top
+      wr = Math.max(9, 0.055 * mm);
+      rodW = Math.max(3, 0.017 * mm);
+    }
+
+    // ---- helpers ----
+    const shape = (s) => {                // s in [-1,1] -> flatter near the ends
+      const a = clamp(Math.abs(s), 0, 1);
+      return (s < 0 ? -1 : 1) * (1 - Math.pow(1 - a, Q));
+    };
+    const shapeInv = (y) => {             // exact inverse of shape()
+      const a = clamp(Math.abs(y), 0, 1);
+      return (y < 0 ? -1 : 1) * (1 - Math.pow(1 - a, 1 / Q));
+    };
+    function halfAt(y) {                  // body half-width at a given local y
+      const fr = clamp((y - topY) / (bodyH + 1e-6), 0, 1);
+      return halfTop + fr * (halfBot - halfTop);
+    }
+    const rodX = (fr, a) => pivotX + fr * L * Math.sin(a);
+    const rodY = (fr, a) => pivotY - fr * L * Math.cos(a);
+    function bpmOf(fr) {
+      const u = clamp((fr - F_MIN) / (F_MAX - F_MIN + 1e-6), 0, 1);
+      return BPM_FAST + (BPM_SLOW - BPM_FAST) * u;      // low = fast, high = slow
+    }
+    // invert the subtle body rock so hit-testing matches what's drawn
+    const unrockX = (x, y) => { const c = Math.cos(rock), s = Math.sin(rock); return cx + (x - cx) * c + (y - baseY) * s; };
+    const unrockY = (x, y) => { const c = Math.cos(rock), s = Math.sin(rock); return baseY - (x - cx) * s + (y - baseY) * c; };
+    function roundRect(x, y, w, h, r) {
+      const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+      g.beginPath();
+      g.moveTo(x + rr, y);
+      g.arcTo(x + w, y, x + w, y + h, rr);
+      g.arcTo(x + w, y + h, x, y + h, rr);
+      g.arcTo(x, y + h, x, y, rr);
+      g.arcTo(x, y, x + w, y, rr);
+      g.closePath();
+    }
+    function distToRod(x, y) {
+      const ax = pivotX, ay = pivotY, bx = rodX(1, armAngle), by = rodY(1, armAngle);
+      const vx = bx - ax, vy = by - ay, wx = x - ax, wy = y - ay;
+      let tt = clamp((wx * vx + wy * vy) / (vx * vx + vy * vy + 1e-6), 0, 1);
+      return Math.hypot(x - (ax + tt * vx), y - (ay + tt * vy));
+    }
+
+    // ---- drawing (all inside the rocked frame) ----
+    function drawBody() {
+      const blx = cx - halfBot, brx = cx + halfBot, tlx = cx - halfTop, trx = cx + halfTop;
+      g.globalAlpha = 0.15; g.fillStyle = AMBER;
+      g.beginPath();
+      g.moveTo(blx, baseY); g.lineTo(brx, baseY); g.lineTo(trx, topY); g.lineTo(tlx, topY);
+      g.closePath(); g.fill();
+      // inner bevels for a bit of pyramid depth
+      g.globalAlpha = 0.45; g.strokeStyle = AMBER; g.lineWidth = Math.max(1.5, mm * 0.006);
+      for (const sgn of [-1, 1]) {
+        g.beginPath();
+        g.moveTo(cx + sgn * (halfBot - mm * 0.055), baseY - mm * 0.02);
+        g.lineTo(cx + sgn * (halfTop - mm * 0.03), topY + mm * 0.03);
+        g.stroke();
+      }
+      // bold outline
+      g.globalAlpha = 1; g.lineWidth = Math.max(3, mm * 0.022);
+      g.beginPath();
+      g.moveTo(blx, baseY); g.lineTo(brx, baseY); g.lineTo(trx, topY); g.lineTo(tlx, topY);
+      g.closePath(); g.stroke();
+      // foot / plinth
+      const fh = mm * 0.05, fhw = halfBot * 1.04;
+      g.globalAlpha = 0.15; g.fillStyle = AMBER;
+      roundRect(cx - fhw, baseY - fh * 0.35, fhw * 2, fh, fh * 0.45); g.fill();
+      g.globalAlpha = 1; g.lineWidth = Math.max(3, mm * 0.02);
+      roundRect(cx - fhw, baseY - fh * 0.35, fhw * 2, fh, fh * 0.45); g.stroke();
+    }
+
+    function drawScale() {
+      const nearest = Math.round((fShown - F_MIN) / (F_MAX - F_MIN + 1e-6) * (GRADS - 1));
+      for (let k = 0; k < GRADS; k++) {
+        const fr = F_MIN + (F_MAX - F_MIN) * k / (GRADS - 1);
+        const y = pivotY - fr * L;
+        const hw = halfAt(y) * 0.46;
+        const on = k === nearest;
+        g.strokeStyle = CREAM;
+        g.globalAlpha = on ? (0.55 + 0.4 * flash) : 0.16;
+        g.lineWidth = on ? Math.max(2.5, mm * 0.013) : Math.max(1.5, mm * 0.008);
+        const ext = on ? hw + mm * 0.022 : hw;
+        g.beginPath(); g.moveTo(cx - ext, y); g.lineTo(cx + ext, y); g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
+
+    function drawRod() {
+      const tx = rodX(1, armAngle), ty = rodY(1, armAngle);
+      const wxp = rodX(fShown, armAngle), wyp = rodY(fShown, armAngle);
+      // rod
+      g.globalAlpha = 1; g.strokeStyle = CREAM; g.lineWidth = rodW;
+      g.beginPath(); g.moveTo(pivotX, pivotY); g.lineTo(tx, ty); g.stroke();
+      g.fillStyle = CREAM; g.beginPath(); g.arc(tx, ty, rodW * 0.8, 0, TAU); g.fill();
+      // pivot hub
+      g.fillStyle = AMBER; g.beginPath(); g.arc(pivotX, pivotY, wr * 0.5, 0, TAU); g.fill();
+      g.strokeStyle = CREAM; g.lineWidth = Math.max(2, mm * 0.008);
+      g.beginPath(); g.arc(pivotX, pivotY, wr * 0.5, 0, TAU); g.stroke();
+      g.fillStyle = CORAL; g.beginPath(); g.arc(pivotX, pivotY, wr * 0.16, 0, TAU); g.fill();
+      // sliding weight (coral block riding the rod)
+      const aw = wr * 0.95, ah = wr * 1.25;
+      g.save();
+      g.translate(wxp, wyp); g.rotate(armAngle);
+      g.globalAlpha = 0.95; g.fillStyle = CORAL;
+      roundRect(-aw, -ah, aw * 2, ah * 2, wr * 0.5); g.fill();
+      g.globalAlpha = 1; g.strokeStyle = CREAM; g.lineWidth = Math.max(2, mm * 0.01);
+      roundRect(-aw, -ah, aw * 2, ah * 2, wr * 0.5); g.stroke();
+      g.globalAlpha = 0.5; g.lineWidth = Math.max(1.5, mm * 0.006);
+      for (const gy of [-ah * 0.42, 0, ah * 0.42]) {
+        g.beginPath(); g.moveTo(-aw * 0.6, gy); g.lineTo(aw * 0.6, gy); g.stroke();
+      }
+      g.restore();
+      g.globalAlpha = 1;
+      // grab affordance on the weight — an obvious 'drag me' at all times
+      const overW = Math.hypot(hx - wxp, hy - wyp) < wr + 14;
+      if (dragWt || (overW && !dragArm)) {
+        g.strokeStyle = CREAM; g.globalAlpha = dragWt ? 0.55 : 0.3; g.lineWidth = 2;
+        g.beginPath(); g.arc(wxp, wyp, wr * 1.55, 0, TAU); g.stroke();
+      } else if (!dragArm) {
+        g.strokeStyle = CORAL; g.globalAlpha = 0.1 + 0.13 * pulse; g.lineWidth = 2;
+        g.beginPath(); g.arc(wxp, wyp, wr * (1.42 + 0.16 * pulse), 0, TAU); g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
+
+    function drawFlash() {
+      g.globalAlpha = flash * 0.85; g.fillStyle = CREAM;
+      g.beginPath(); g.arc(flashX, flashY, wr * (0.28 + 0.24 * flash), 0, TAU); g.fill();
+      g.globalAlpha = flash * 0.6; g.strokeStyle = CORAL; g.lineWidth = Math.max(2, mm * 0.011);
+      g.beginPath(); g.arc(flashX, flashY, wr * (0.5 + 1.1 * (1 - flash)), 0, TAU); g.stroke();
+      g.globalAlpha = 1;
+    }
+
+    return {
+      draw(t, dt) {
+        layout();
+        const w = env.w, h = env.h;
+
+        // tempo eases toward the target implied by the (shown) weight height
+        const omT = Math.PI * bpmOf(fShown) / 60;
+        omega += (omT - omega) * Math.min(1, 8 * dt);
+        if (!dragWt) fShown += (f - fShown) * Math.min(1, 12 * dt);
+        amp += (IDLE_AMP - amp) * Math.min(1, 2.5 * dt);
+
+        if (!dragArm) {
+          phase += omega * dt;
+          armAngle = amp * shape(Math.sin(phase));
+          const n = Math.floor((phase - Math.PI / 2) / Math.PI);   // extreme just crossed
+          if (n > lastN) {
+            lastN = n;
+            flash = 1;
+            flashX = rodX(1, armAngle); flashY = rodY(1, armAngle);
+          }
+        }
+        const rockT = clamp(-0.085 * armAngle, -0.05, 0.05);
+        rock += (rockT - rock) * Math.min(1, 10 * dt);
+        flash = Math.max(0, flash - dt * 6);
+        pulse = 0.5 + 0.5 * Math.sin(t * 1.7);
+
+        // ---- render ----
+        g.globalAlpha = 1;
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        g.lineJoin = 'round'; g.lineCap = 'round';
+        g.save();
+        g.translate(cx, baseY); g.rotate(rock); g.translate(-cx, -baseY);
+        drawBody();
+        drawScale();
+        drawRod();
+        if (flash > 0.02) drawFlash();
+        g.restore();
+        g.globalAlpha = 1;
+      },
+
+      down(p) {
+        const lx = unrockX(p.x, p.y), ly = unrockY(p.x, p.y);
+        const wxp = rodX(fShown, armAngle), wyp = rodY(fShown, armAngle);
+        if (Math.hypot(lx - wxp, ly - wyp) < wr + 14) { dragWt = true; return; }
+        if (distToRod(lx, ly) < 26 || (ly < pivotY - 4 && Math.abs(lx - cx) < halfAt(ly) + 10)) {
+          dragArm = true; dragV = 0;
+        }
+      },
+      move(p) {
+        const lx = unrockX(p.x, p.y), ly = unrockY(p.x, p.y);
+        hx = lx; hy = ly;
+        if (dragWt) {
+          const proj = (lx - pivotX) * Math.sin(armAngle) - (ly - pivotY) * Math.cos(armAngle);
+          const fr = clamp(proj / (L + 1e-6), F_MIN, F_MAX);
+          f = fr; fShown = fr;                          // weight answers instantly
+        } else if (dragArm) {
+          const th = Math.atan2(lx - pivotX, -(ly - pivotY));
+          const na = clamp(th, -MAX_AMP, MAX_AMP);
+          dragV = dragV * 0.6 + (na - armAngle) * 0.4 * 60;
+          armAngle = na;                                // arm answers instantly
+        }
+      },
+      up() {
+        if (dragArm) {
+          dragArm = false;
+          // resume the phase-driven swing from the released angle + direction
+          if (Math.abs(armAngle) > amp) amp = Math.min(MAX_AMP, Math.abs(armAngle) + 0.02);
+          const sVal = shapeInv(clamp(armAngle / (amp + 1e-6), -1, 1));
+          let ph = Math.asin(clamp(sVal, -1, 1));       // moving toward +extreme
+          if (dragV < 0) ph = Math.PI - ph;             // moving toward -extreme
+          phase = ph;
+          lastN = Math.floor((phase - Math.PI / 2) / Math.PI);
+          amp = clamp(Math.max(amp, IDLE_AMP + Math.min(0.3, Math.abs(dragV) * 0.05)), IDLE_AMP, MAX_AMP);
+        }
+        dragWt = false;
+      },
+      wheel(dy) {
+        // nudge the weight along the rod (scroll up = weight up = slower)
+        f = clamp(f - Math.sign(dy) * 0.06, F_MIN, F_MAX);
+      },
+      dbl() {
+        // glide back to a calm ~120 bpm and give the swing a soft push
+        const u = clamp((120 - BPM_FAST) / (BPM_SLOW - BPM_FAST), 0, 1);
+        f = clamp(F_MIN + u * (F_MAX - F_MIN), F_MIN, F_MAX);
+        amp = clamp(Math.max(amp, IDLE_AMP + 0.16), IDLE_AMP, MAX_AMP);
+      },
+      leave() { hx = -999; hy = -999; },
+    };
+  },
+});
+})();
+
+/* --- 42-buoyancy.js --- */
+;(() => {
+/* № 42 — Corks. A side-on tank: five corks ride a wavy, living waterline,
+   tipping with the swell. Grab one and shove it under — it fights back, and
+   on release buoyancy fires it up through the surface in a splash, the
+   ripples spreading along the water to jostle its neighbors. A 1-D wave
+   carries both the idle swell and every splash; buoyancy is an upward pull
+   that grows with how deep a cork is pushed, tamed by water drag. */
+F.register({
+  n: 42, id: 'buoyancy', cat: 'matter',
+  title: 'Corks', hint: 'Push the corks under — they bob back up',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+    // ---- palette: amber corks on a sky/mint tank, cream for light ----
+    const hex = s => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
+    const AMBER = hex(inks[0]), MINT = hex(inks[2]), SKY = hex(inks[3]), CREAM = hex(inks[5]), GROUND = hex(bg);
+    const mix = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+    const rgb = c => 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+    const rgba = (c, a) => 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' + a + ')';
+    const BAND = mix(AMBER, GROUND, 0.52);   // dark cork band
+    const RIM = mix(AMBER, GROUND, 0.34);    // chunky outline
+    const HILITE = mix(AMBER, CREAM, 0.7);   // lit upper edge
+
+    // ---- 1-D surface: procedural swell (always alive) + dynamic wave ----
+    const M = 88;
+    let surf = new Float32Array(M);
+    let surfPrev = new Float32Array(M);
+    const lineY = new Float32Array(M);
+    const SSTEP = 1 / 120, SVDAMP = 0.985, SK = 0.22;
+    let sacc = 0;
+
+    // ---- size-derived state, (re)built in layout() ----
+    let m, baseY, colW, A1, A2, A3, k1, k2, k3, G, B, VMAX, SMAX;
+    const W1 = 0.55, W2 = 0.83, W3 = 1.7, FRACEQ = 0.36;
+    let corks = [], seeded = false, lastW = 0, lastH = 0, lastM = 0;
+
+    function layout() {
+      const w = env.w, h = env.h, nm = Math.min(w, h);
+      baseY = h * 0.40;
+      colW = w / (M - 1);
+      A1 = nm * 0.022; A2 = nm * 0.012; A3 = nm * 0.006;
+      k1 = TAU * 1.4 / w; k2 = TAU * 2.6 / w; k3 = TAU * 4.6 / w;
+      G = nm * 2.2; B = G / FRACEQ; VMAX = nm * 3.2; SMAX = nm * 0.10;
+      if (!seeded) {
+        for (let i = 0; i < 5; i++) {
+          const hw = nm * (0.050 + Math.random() * 0.022);
+          const hh = hw * (1.35 + Math.random() * 0.28);
+          const x = w * (0.15 + 0.70 * (i / 4)) + (Math.random() - 0.5) * w * 0.04;
+          corks.push({ x, y: baseY - 0.28 * hh, vx: (Math.random() - 0.5) * 10, vy: 0,
+            hw, hh, ang: (Math.random() - 0.5) * 0.18, av: 0, pf: 0 });
+        }
+        seeded = true;
+        disturb(w * 0.32, -3.5, nm * 0.05);  // opening ripples so it greets you alive
+        disturb(w * 0.7, 2.4, nm * 0.045);
+      } else if (lastW > 0) {
+        const sx = w / lastW, sy = h / lastH, ss = nm / (lastM || nm);
+        for (const c of corks) {
+          c.hw *= ss; c.hh *= ss;
+          c.x = clamp(c.x * sx, c.hw, w - c.hw);
+          c.y *= sy; c.vx *= 0.3; c.vy *= 0.3;
+        }
+      }
+      m = nm; lastW = w; lastH = h; lastM = nm;
+    }
+
+    function swellAt(x, t) {
+      return A1 * Math.sin(x * k1 + t * W1) + A2 * Math.sin(x * k2 - t * W2 + 1.7)
+        + A3 * Math.sin(x * k3 + t * W3 + 0.4);
+    }
+    function surfAt(x) {
+      const f = clamp(x / colW, 0, M - 1), i = f | 0, fr = f - i;
+      const a = surf[i], b = surf[i < M - 1 ? i + 1 : i];
+      return a + (b - a) * fr;
+    }
+    const waterY = (x, t) => baseY + swellAt(x, t) + surfAt(x);
+
+    function disturb(x, amount, radPx) {
+      const c = x / colW, rad = Math.max(1, radPx / colW);
+      const i0 = Math.max(0, Math.floor(c - rad)), i1 = Math.min(M - 1, Math.ceil(c + rad));
+      for (let i = i0; i <= i1; i++) {
+        const d = (i - c) / rad;
+        if (d * d >= 1) continue;
+        surf[i] += amount * (1 - d * d);
+      }
+    }
+    function surfStep() {
+      for (let i = 0; i < M; i++) {
+        const c = surf[i];
+        const l = i > 0 ? surf[i - 1] : c, r = i < M - 1 ? surf[i + 1] : c;
+        let n = c + (c - surfPrev[i]) * SVDAMP + SK * (l + r - 2 * c);
+        if (n > SMAX) n = SMAX; else if (n < -SMAX) n = -SMAX; else if (n !== n) n = 0;
+        surfPrev[i] = n;
+      }
+      const tmp = surf; surf = surfPrev; surfPrev = tmp;
+    }
+
+    // ---- splash droplets ----
+    let drops = [];
+    const DROPMAX = 80;
+    function emit(x, y, count, power) {
+      for (let k = 0; k < count && drops.length < DROPMAX; k++) {
+        const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.3;
+        const sp = power * (0.4 + Math.random() * 0.9);
+        drops.push({ x: x + (Math.random() - 0.5) * 6, y: y - 2,
+          vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+          life: 0.45 + Math.random() * 0.45,
+          col: Math.random() < 0.5 ? CREAM : mix(SKY, CREAM, 0.4) });
+      }
+    }
+
+    // ---- pointer / grab ----
+    let ptr = { x: 0, y: 0 }, grab = null, hover = null, tNow = 0;
+    function pick(px, py) {
+      let best = -1, bestd = 16;
+      for (let i = 0; i < corks.length; i++) {
+        const c = corks[i], dx = px - c.x, dy = py - c.y;
+        const ca = Math.cos(-c.ang), sa = Math.sin(-c.ang);
+        const lx = dx * ca - dy * sa, ly = dx * sa + dy * ca;
+        const ox = Math.max(0, Math.abs(lx) - c.hw), oy = Math.max(0, Math.abs(ly) - c.hh);
+        const d = Math.hypot(ox, oy);
+        if (d < bestd) { bestd = d; best = i; }
+      }
+      return best;
+    }
+
+    function trace(r, sy) {                    // rounded vertical capsule, local frame
+      g.beginPath();
+      g.arc(0, -sy, r, 0, Math.PI, true);      // top cap bulges up
+      g.lineTo(-r, sy);                        // left side
+      g.arc(0, sy, r, Math.PI, 0, true);       // bottom cap bulges down
+      g.closePath();                           // right side
+    }
+    function drawCork(c) {
+      const hw = c.hw, hh = c.hh, r = hw, sy = Math.max(1, hh - hw);
+      g.save();
+      g.translate(c.x, c.y);
+      g.rotate(c.ang);
+      trace(r, sy);
+      g.fillStyle = rgb(AMBER);
+      g.fill();
+      g.save();
+      trace(r, sy);
+      g.clip();
+      const gg = g.createLinearGradient(-hw, -hh, hw, hh);   // rounded shading
+      gg.addColorStop(0, rgba(HILITE, 0.6));
+      gg.addColorStop(0.5, rgba(AMBER, 0));
+      gg.addColorStop(1, rgba(BAND, 0.5));
+      g.fillStyle = gg;
+      g.fillRect(-hw, -hh, hw * 2, hh * 2);
+      const bH = Math.max(3, hh * 0.18);                     // dark band
+      g.fillStyle = rgb(BAND);
+      g.fillRect(-hw, hh * 0.18 - bH * 0.5, hw * 2, bH);
+      g.strokeStyle = rgba(CREAM, 0.5);                      // specular streak
+      g.lineWidth = Math.max(2, hw * 0.34);
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(-hw * 0.34, -sy * 0.7);
+      g.lineTo(-hw * 0.34, sy * 0.25);
+      g.stroke();
+      g.restore();
+      trace(r, sy);                                          // chunky rim
+      g.strokeStyle = rgb(RIM);
+      g.lineWidth = Math.max(2, hw * 0.16);
+      g.lineJoin = 'round';
+      g.stroke();
+      g.restore();
+    }
+
+    layout();
+
+    return {
+      draw(t, dt) {
+        tNow = t;
+        dt = dt > 0.05 ? 0.05 : dt < 0 ? 0 : dt;
+        const w = env.w, h = env.h;
+
+        // corks displace the surface as they move through it (jostles neighbors)
+        for (const c of corks) {
+          const wy = waterY(c.x, t);
+          const frac = clamp((c.y + c.hh - wy) / (2 * c.hh + 1e-6), 0, 1);
+          if (frac > 0.02) disturb(c.x, clamp(-c.vy * frac * 0.010, -6, 6), c.hw * 1.3);
+        }
+        sacc = Math.min(sacc + dt, SSTEP * 4);
+        while (sacc >= SSTEP) { surfStep(); sacc -= SSTEP; }
+
+        // integrate each cork
+        for (let i = 0; i < corks.length; i++) {
+          const c = corks[i];
+          if (grab && grab.i === i) {                        // held: crisp follow + flick tracking
+            let tx = clamp(ptr.x + grab.ox, -0.4 * w, 1.4 * w);
+            let ty = clamp(ptr.y + grab.oy, -0.4 * h, 1.6 * h);
+            const ivx = clamp((tx - c.x) / Math.max(dt, 1e-3), -VMAX, VMAX);
+            const ivy = clamp((ty - c.y) / Math.max(dt, 1e-3), -VMAX, VMAX);
+            grab.evx = grab.evx * 0.6 + ivx * 0.4;
+            grab.evy = grab.evy * 0.6 + ivy * 0.4;
+            c.vx = ivx; c.vy = ivy; c.x = tx; c.y = ty;
+          } else {
+            const wy = waterY(c.x, t);
+            const frac = clamp((c.y + c.hh - wy) / (2 * c.hh + 1e-6), 0, 1);
+            const ay = G - B * frac;                          // gravity down, buoyancy up
+            c.vy += ay * dt;
+            c.vy -= c.vy * (0.5 + 2.9 * frac) * dt;           // air vs water drag
+            c.vy = clamp(c.vy, -VMAX, VMAX);
+            c.y += c.vy * dt;
+            const slope = (waterY(c.x + 6, t) - waterY(c.x - 6, t)) / 12;
+            c.vx += -slope * G * 0.04 * frac * dt;            // slide gently down the swell
+            c.vx -= c.vx * (0.8 + 1.6 * frac) * dt;
+            c.vx = clamp(c.vx, -VMAX * 0.5, VMAX * 0.5);
+            c.x += c.vx * dt;
+            const targ = clamp(Math.atan(slope), -0.5, 0.5);  // tip with the surface
+            c.av += (targ - c.ang) * 22 * dt;
+            c.av -= c.av * (3 + 3 * frac) * dt;
+            c.av = clamp(c.av, -8, 8);
+            c.ang = clamp(c.ang + c.av * dt, -1.2, 1.2);
+          }
+          // splash on a fast break through the surface
+          const wy2 = waterY(c.x, t);
+          const f2 = clamp((c.y + c.hh - wy2) / (2 * c.hh + 1e-6), 0, 1);
+          if (c.pf - f2 > 0.05 && c.vy < -m * 0.6 && f2 < 0.6) {
+            emit(c.x, wy2, 2 + (Math.random() * 3 | 0), Math.min(m * 1.6, -c.vy * 0.6));
+            disturb(c.x, 2, c.hw * 1.4);
+          } else if (f2 - c.pf > 0.10 && c.vy > m * 0.7) {
+            emit(c.x, wy2, 2, Math.min(m * 1.2, c.vy * 0.4));
+          }
+          c.pf = f2;
+          if (c.x !== c.x) { c.x = w * 0.5; c.vx = 0; }        // never NaN a coord
+          if (c.y !== c.y) { c.y = baseY; c.vy = 0; }
+          if (c.ang !== c.ang) { c.ang = 0; c.av = 0; }
+        }
+
+        // pairwise jostle (only 5 corks)
+        for (let a = 0; a < corks.length; a++) for (let b = a + 1; b < corks.length; b++) {
+          const ca = corks[a], cb = corks[b];
+          const dx = cb.x - ca.x, dy = cb.y - ca.y;
+          const mnx = (ca.hw + cb.hw) * 0.95, mny = (ca.hh + cb.hh) * 0.7;
+          if (Math.abs(dx) < mnx && Math.abs(dy) < mny) {
+            const push = (mnx - Math.abs(dx)) * 0.25, dir = dx >= 0 ? 1 : -1;
+            const rvx = cb.vx - ca.vx, rvy = cb.vy - ca.vy, j = 0.25;
+            if (!(grab && grab.i === a)) { ca.x -= dir * push; ca.vx += rvx * j; ca.vy += rvy * j * 0.5; }
+            if (!(grab && grab.i === b)) { cb.x += dir * push; cb.vx -= rvx * j; cb.vy -= rvy * j * 0.5; }
+          }
+        }
+        // soft walls + tank floor/ceiling for free corks
+        for (let i = 0; i < corks.length; i++) {
+          const c = corks[i];
+          if (grab && grab.i === i) continue;
+          if (c.x < c.hw) { c.x = c.hw; if (c.vx < 0) c.vx = -c.vx * 0.4; }
+          else if (c.x > w - c.hw) { c.x = w - c.hw; if (c.vx > 0) c.vx = -c.vx * 0.4; }
+          const floor = h - c.hh * 0.5;
+          if (c.y > floor) { c.y = floor; if (c.vy > 0) c.vy = -c.vy * 0.3; }
+          if (c.y < -c.hh * 2) { c.y = -c.hh * 2; if (c.vy < 0) c.vy = 0; }
+        }
+
+        // droplets
+        for (let i = drops.length - 1; i >= 0; i--) {
+          const d = drops[i];
+          d.vy += G * 1.15 * dt;
+          d.x += d.vx * dt; d.y += d.vy * dt;
+          d.life -= dt;
+          const wy = waterY(d.x, t);
+          if (d.life <= 0 || (d.vy > 0 && d.y > wy)) {
+            if (d.y > wy && d.vy > 40) disturb(d.x, 0.6, m * 0.02);
+            drops.splice(i, 1);
+          }
+        }
+
+        // ===== render =====
+        g.fillStyle = bg;
+        g.fillRect(0, 0, w, h);
+        for (let i = 0; i < M; i++) {
+          let v = baseY + swellAt(i * colW, t) + surf[i];
+          lineY[i] = clamp(v === v ? v : baseY, 6, h - 4);
+        }
+        // water body
+        g.beginPath();
+        g.moveTo(0, lineY[0]);
+        for (let i = 1; i < M; i++) g.lineTo(i * colW, lineY[i]);
+        g.lineTo(w, h); g.lineTo(0, h); g.closePath();
+        const gb = g.createLinearGradient(0, baseY - m * 0.06, 0, h);
+        gb.addColorStop(0, rgba(SKY, 0.34));
+        gb.addColorStop(0.5, rgba(mix(SKY, MINT, 0.6), 0.46));
+        gb.addColorStop(1, rgba(mix(MINT, GROUND, 0.55), 0.66));
+        g.fillStyle = gb; g.fill();
+        // corks
+        for (const c of corks) drawCork(c);
+        // translucent water veil tints the submerged parts
+        g.beginPath();
+        g.moveTo(0, lineY[0]);
+        for (let i = 1; i < M; i++) g.lineTo(i * colW, lineY[i]);
+        g.lineTo(w, h); g.lineTo(0, h); g.closePath();
+        const gv = g.createLinearGradient(0, baseY - m * 0.02, 0, h);
+        gv.addColorStop(0, rgba(SKY, 0.20));
+        gv.addColorStop(0.5, rgba(MINT, 0.34));
+        gv.addColorStop(1, rgba(mix(MINT, GROUND, 0.4), 0.52));
+        g.fillStyle = gv; g.fill();
+        // bold waterline + crest sparkle
+        g.lineJoin = 'round'; g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(0, lineY[0]);
+        for (let i = 1; i < M; i++) g.lineTo(i * colW, lineY[i]);
+        g.strokeStyle = rgba(mix(MINT, CREAM, 0.3), 0.9);
+        g.lineWidth = Math.max(2, m * 0.010);
+        g.stroke();
+        g.beginPath();
+        g.moveTo(0, lineY[0] - 2);
+        for (let i = 1; i < M; i++) g.lineTo(i * colW, lineY[i] - 2);
+        g.strokeStyle = rgba(CREAM, 0.26);
+        g.lineWidth = 1.5;
+        g.stroke();
+        // splashes on top
+        for (const d of drops) {
+          const a = clamp(d.life * 1.6, 0, 1);
+          g.fillStyle = rgba(d.col, 0.85 * a);
+          g.beginPath();
+          g.arc(d.x, d.y, Math.max(1.4, m * 0.010), 0, TAU);
+          g.fill();
+        }
+      },
+      down(p) {
+        ptr.x = p.x; ptr.y = p.y;
+        const i = pick(p.x, p.y);
+        if (i >= 0) { const c = corks[i]; grab = { i, ox: c.x - p.x, oy: c.y - p.y, evx: 0, evy: 0 }; }
+      },
+      move(p) {
+        ptr.x = p.x; ptr.y = p.y;
+        if (!p.held) {
+          const wy = waterY(p.x, tNow);
+          if (Math.abs(p.y - wy) < m * 0.10) {
+            if (hover == null) hover = p.x;
+            else if (Math.abs(p.x - hover) > colW * 0.8) { disturb(p.x, -0.5, m * 0.03); hover = p.x; }
+          } else hover = null;
+        }
+      },
+      up() {
+        if (grab) { const c = corks[grab.i]; c.vx = clamp(grab.evx, -VMAX, VMAX); c.vy = clamp(grab.evy, -VMAX, VMAX); grab = null; }
+      },
+      leave() {
+        if (grab) { const c = corks[grab.i]; c.vx = clamp(grab.evx, -VMAX, VMAX); c.vy = clamp(grab.evy, -VMAX, VMAX); grab = null; }
+        hover = null;
+      },
+      dbl(p) {
+        const i = pick(p.x, p.y);
+        if (i >= 0) {                                   // dunk a cork and watch it fire back
+          const c = corks[i];
+          c.vy = clamp(c.vy + VMAX * 0.5, -VMAX, VMAX);
+          disturb(c.x, 2.5, c.hw * 1.6);
+          emit(c.x, waterY(c.x, tNow), 5, m * 1.1);
+        } else {
+          disturb(p.x, -3, m * 0.05);
+          emit(p.x, waterY(p.x, tNow), 4, m * 0.9);
+        }
+      },
+      resize() { layout(); },
+    };
+  },
+});
+})();
+
 /* --- 43-soap-film.js --- */
 ;(() => {
 /* № 43 — Soap film. A bubble stretched across the card, its skin swimming with
@@ -8315,6 +10361,1440 @@ F.register({
         pushVy += (Math.random() - 0.5) * 900;
         bright = 2;
       },
+    };
+  },
+});
+})();
+
+/* --- 44-puffer.js --- */
+;(() => {
+/* № 44 — Puffer fish. A small worried fish drifting in the dark water: fins
+   fluttering, tail waving, a big eye blinking now and then. Poke it — or rush
+   it, or corner it against an edge while it nervously flees your pointer — and
+   it STARTLES, ballooning into a spiky cream ball with a springy overshoot,
+   then slowly, grumpily deflates back to its calm little self. */
+F.register({
+  n: 44, id: 'puffer', cat: 'critters',
+  title: 'Puffer fish', hint: 'Poke it — watch it puff up with spikes',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const AMBER = inks[0], CREAM = inks[5];
+
+    // ---- sizing (rebuilt on resize) ----
+    let m = 1, baseR = 30, homeX = 0, homeY = 0, wanderAmp = 20, inited = false;
+
+    // ---- fish state ----
+    let fx = 0, fy = 0, fvx = 0, fvy = 0;         // centre + velocity
+    let face = 1, faceT = 1;                       // horizontal facing, eased
+    let puff = 0, puffV = 0, puffTarget = 0, puffHold = 0;
+    let grump = 0, curR = 30;
+    let pupilX = 0.2, pupilY = 0.2;                // eased look direction
+
+    // ---- timers ----
+    let now = 0, blinkT = -9, nextBlink = 2.4, lastStartle = -9;
+    let cornerCd = 0, nextIdleBub = 3;
+
+    // ---- pointer ----
+    let px = 0, py = 0, lpx = 0, lpy = 0, pdown = false, pinside = false, pspeed = 0;
+
+    // ---- spikes (seeded once) ----
+    const NSP = 16;
+    const spA = new Float32Array(NSP), spLen = new Float32Array(NSP);
+    const spPh = new Float32Array(NSP), spW = new Float32Array(NSP);
+    for (let i = 0; i < NSP; i++) {
+      spA[i] = (i / NSP) * TAU + (Math.random() - 0.5) * 0.14;
+      spLen[i] = 0.8 + Math.random() * 0.5;
+      spPh[i] = Math.random() * TAU;
+      spW[i] = 0.7 + Math.random() * 0.6;
+    }
+    // ---- freckles (seeded once) ----
+    const NSPOT = 4;
+    const spotA = new Float32Array(NSPOT), spotR = new Float32Array(NSPOT);
+    for (let i = 0; i < NSPOT; i++) {
+      spotA[i] = 0.6 + Math.random() * (Math.PI - 1.2);
+      spotR[i] = 0.35 + Math.random() * 0.4;
+    }
+
+    // ---- bubbles ----
+    const bubbles = [];
+    function spawnBubbles(k) {
+      for (let i = 0; i < k; i++) {
+        if (bubbles.length > 40) bubbles.shift();
+        bubbles.push({
+          x: fx + face * baseR * 0.5 + (Math.random() - 0.5) * baseR * 0.6,
+          y: fy - baseR * 0.25 + (Math.random() - 0.5) * baseR * 0.4,
+          vy: (0.4 + Math.random() * 0.5) * m,
+          r: baseR * (0.06 + Math.random() * 0.08),
+          life: 1, max: 0.8 + Math.random() * 0.9,
+          wob: Math.random() * TAU,
+        });
+      }
+    }
+
+    function startle(sx, sy) {
+      if (puff > 0.45 || now < lastStartle + 0.2) return;   // refractory
+      lastStartle = now;
+      puffTarget = 1; puffHold = 0.7; puffV += 2.6;         // snappy overshoot
+      let dx = fx - sx, dy = fy - sy;
+      const d = Math.hypot(dx, dy) + 1e-6;
+      if (d < 1) { dx = 0; dy = -1; }
+      fvx += (dx / d) * 0.45 * m;                            // recoil away
+      fvy += (dy / d) * 0.45 * m - 0.12 * m;                 // + startled hop
+      spawnBubbles(6);
+      nextBlink = now + 2.4 + Math.random() * 3;
+    }
+
+    function layout() {
+      m = Math.min(env.w, env.h);
+      baseR = 0.115 * m;
+      homeX = env.w * 0.5; homeY = env.h * 0.52;
+      wanderAmp = 0.10 * m;
+      if (!inited) { fx = homeX; fy = homeY; inited = true; }
+      fx = Math.max(baseR, Math.min(env.w - baseR, fx));
+      fy = Math.max(baseR, Math.min(env.h - baseR, fy));
+    }
+    layout();
+
+    return {
+      draw(t, dt) {
+        now = t;
+        const w = env.w, h = env.h;
+        pspeed = Math.hypot(px - lpx, py - lpy) / Math.max(dt, 1e-3);
+
+        // ---- puff spring + slow deflate ----
+        if (puffHold > 0) puffHold -= dt;
+        else puffTarget += (0 - puffTarget) * (1 - Math.pow(0.3, dt));
+        {
+          const SUB = 3, hh = dt / SUB, K = 210, C = 13;
+          for (let s = 0; s < SUB; s++) {
+            const a = (puffTarget - puff) * K - puffV * C;
+            puffV += a * hh; puff += puffV * hh;
+          }
+          if (puff < 0) { puff = 0; if (puffV < 0) puffV = 0; }
+          if (puff > 1.6) { puff = 1.6; if (puffV > 0) puffV = 0; }
+        }
+        const pf = Math.min(1, puff);
+        const alarm = Math.max(0, Math.min(1, puff * 1.15));
+        const deflating = puffHold <= 0 && puffV < -0.05 && puff > 0.12;
+        if (deflating) grump += (1 - grump) * (1 - Math.pow(0.2, dt));
+        else grump += (0 - grump) * (1 - Math.pow(0.75, dt));
+
+        // ---- body radii (squash & stretch on inflate) ----
+        const breathe = 1 + 0.03 * Math.sin(t * 1.8) * (1 - pf);
+        const ss = Math.max(-0.24, Math.min(0.24, puffV * 0.09));
+        const RXd = Math.max(4, baseR * (1.15 + 0.78 * puff) * breathe * (1 - ss));
+        const RYd = Math.max(4, baseR * (0.80 + 1.13 * puff) * breathe * (1 + ss));
+        const bodyRep = (RXd + RYd) * 0.5;
+        curR = Math.max(RXd, RYd);
+        const spikeReach = baseR * 0.6 * Math.max(0, puff);
+        const effR = Math.max(RXd, RYd) + spikeReach * 0.7 + 2;
+
+        // ---- steering: idle drift, flee, shy hover ----
+        const idleX = homeX + wanderAmp * Math.sin(t * 0.23 + 1.7) + wanderAmp * 0.5 * Math.sin(t * 0.37);
+        const idleY = homeY + wanderAmp * 0.7 * Math.sin(t * 0.31 + 0.6) + baseR * 0.12 * Math.sin(t * 1.6);
+        let d = 0, R = 0, fleeing = false, fleeDX = 0, fleeDY = 0;
+        if (pdown) {
+          const ddx = fx - px, ddy = fy - py;
+          d = Math.hypot(ddx, ddy) + 1e-6;
+          R = baseR * 4 + 0.15 * m;
+          if (d < R) { fleeing = true; fleeDX = ddx / d; fleeDY = ddy / d; }
+        }
+        const kI = fleeing ? 1.2 : 6;
+        let ax = (idleX - fx) * kI - fvx * 2.2;
+        let ay = (idleY - fy) * kI - fvy * 2.2;
+        if (fleeing) {
+          const s = 1 - d / R;
+          ax += fleeDX * 7 * m * s; ay += fleeDY * 7 * m * s;
+        } else if (pinside && !pdown) {
+          const ddx = fx - px, ddy = fy - py, dd = Math.hypot(ddx, ddy) + 1e-6;
+          const RR = baseR * 2.3;
+          if (dd < RR) { const s = 1 - dd / RR; ax += (ddx / dd) * 2 * m * s; ay += (ddy / dd) * 2 * m * s; }
+        }
+        fvx += ax * dt; fvy += ay * dt;
+        const spd = Math.hypot(fvx, fvy), SPDMAX = 9 * m;
+        if (spd > SPDMAX) { fvx *= SPDMAX / spd; fvy *= SPDMAX / spd; }
+        fx += fvx * dt; fy += fvy * dt;
+
+        // ---- bounds + corner puff ----
+        let hitL = false, hitR = false, hitT = false, hitB = false;
+        if (fx < effR) { fx = effR; if (fvx < 0) fvx *= -0.3; hitL = true; }
+        if (fx > w - effR) { fx = w - effR; if (fvx > 0) fvx *= -0.3; hitR = true; }
+        if (fy < effR) { fy = effR; if (fvy < 0) fvy *= -0.3; hitT = true; }
+        if (fy > h - effR) { fy = h - effR; if (fvy > 0) fvy *= -0.3; hitB = true; }
+        if (effR * 2 > w) fx = w * 0.5;    // card narrower than fish
+        if (effR * 2 > h) fy = h * 0.5;
+        if (fleeing && puff < 0.4) {
+          const cornered =
+            (hitL && fleeDX < -0.3) || (hitR && fleeDX > 0.3) ||
+            (hitT && fleeDY < -0.3) || (hitB && fleeDY > 0.3);
+          if (cornered && now > cornerCd) { cornerCd = now + 1.2; startle(px, py); }
+        }
+
+        // ---- fast-approach startle (hover) ----
+        if (pinside && !pdown && puff < 0.4) {
+          const dd = Math.hypot(fx - px, fy - py);
+          const toward = (px - lpx) * (fx - px) + (py - lpy) * (fy - py);
+          if (dd < baseR * 1.9 && pspeed > 4 * m && toward > 0) startle(px, py);
+        }
+
+        // ---- facing ----
+        if (Math.abs(fvx) > 0.05 * m) faceT = fvx > 0 ? 1 : -1;
+        face += (faceT - face) * (1 - Math.pow(0.02, dt));
+
+        // ---- look / pupil ----
+        let lookX, lookY;
+        if (pinside || pdown) {
+          const ddx = px - fx, ddy = py - fy, dd = Math.hypot(ddx, ddy) + 1e-6;
+          lookX = ddx / dd; lookY = ddy / dd;
+        } else {
+          lookX = 0.3 * face + 0.2 * Math.sin(t * 0.6);
+          lookY = 0.2 + 0.15 * Math.sin(t * 0.8 + 1.3);
+        }
+        pupilX += (lookX - pupilX) * (1 - Math.pow(0.02, dt));
+        pupilY += (lookY - pupilY) * (1 - Math.pow(0.02, dt));
+
+        // ---- blink ----
+        if (alarm < 0.2 && t > nextBlink) { blinkT = t; nextBlink = t + 2.6 + Math.random() * 3.4; }
+        const bph = (t - blinkT) / 0.16;
+        const blink = (bph >= 0 && bph <= 1) ? Math.abs(2 * bph - 1) : 1;
+        const eyeOpen = alarm > 0.25 ? 1 : 0.08 + 0.92 * blink;
+
+        // ---- bubbles ----
+        if (t > nextIdleBub) { nextIdleBub = t + 2.6 + Math.random() * 3.2; spawnBubbles(1); }
+        for (let i = bubbles.length - 1; i >= 0; i--) {
+          const b = bubbles[i];
+          b.life -= dt / b.max;
+          b.y -= b.vy * dt;
+          b.x += Math.sin(t * 4 + b.wob) * 10 * dt;
+          if (b.life <= 0 || b.y < -baseR) bubbles.splice(i, 1);
+        }
+
+        // ================= DRAW =================
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+
+        for (let i = 0; i < bubbles.length; i++) {
+          const b = bubbles[i];
+          const al = Math.max(0, Math.min(1, b.life)) * 0.45;
+          g.strokeStyle = `rgba(242,233,220,${al})`;
+          g.lineWidth = Math.max(1, baseR * 0.03);
+          g.beginPath();
+          g.arc(b.x, b.y, b.r * (0.6 + 0.5 * (1 - b.life)), 0, TAU);
+          g.stroke();
+        }
+
+        const tilt = 0.05 * Math.sin(t * 1.3) * (1 - pf) +
+          Math.max(-0.18, Math.min(0.18, fvx * 0.0005)) * (1 - 0.7 * pf);
+        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+        const finA = 1 - 0.85 * pf;
+
+        g.save();
+        g.translate(fx, fy);
+        g.rotate(tilt);
+        g.lineJoin = 'round'; g.lineCap = 'round';
+
+        // ---- tail + dorsal (behind body) ----
+        if (finA > 0.02) {
+          g.save();
+          g.translate(-face * RXd * 0.82, 0);
+          g.rotate(0.34 * Math.sin(t * 4.5 + 0.4));
+          g.fillStyle = `rgba(88,166,242,${0.9 * finA})`;
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(-face * RXd * 0.72, -RYd * 0.72);
+          g.lineTo(-face * RXd * 0.52, 0);
+          g.lineTo(-face * RXd * 0.72, RYd * 0.72);
+          g.closePath(); g.fill();
+          g.restore();
+          g.save();
+          g.translate(-face * RXd * 0.05, -RYd * 0.82);
+          g.rotate(0.18 * Math.sin(t * 4 + 2) * face);
+          g.fillStyle = `rgba(88,166,242,${0.8 * finA})`;
+          g.beginPath();
+          g.moveTo(-face * RXd * 0.28, RYd * 0.18);
+          g.lineTo(face * RXd * 0.03, -RYd * 0.5);
+          g.lineTo(face * RXd * 0.3, RYd * 0.14);
+          g.closePath(); g.fill();
+          g.restore();
+        }
+
+        // ---- spikes (behind body, flush when calm) ----
+        if (puff > 0.02) {
+          g.fillStyle = CREAM;
+          for (let i = 0; i < NSP; i++) {
+            const a = spA[i], ca = Math.cos(a), sa = Math.sin(a);
+            const denom = Math.hypot(RYd * ca, RXd * sa) + 1e-6;
+            const rs = RXd * RYd / denom;
+            const len = spikeReach * spLen[i] * (1 + 0.06 * Math.sin(t * 13 + spPh[i]));
+            const bx = rs * 0.86 * ca, by = rs * 0.86 * sa;
+            const ex = -sa * rs * 0.14 * spW[i], ey = ca * rs * 0.14 * spW[i];
+            g.beginPath();
+            g.moveTo(bx + ex, by + ey);
+            g.lineTo((rs + len) * ca, (rs + len) * sa);
+            g.lineTo(bx - ex, by - ey);
+            g.closePath(); g.fill();
+          }
+        }
+
+        // ---- body ----
+        g.fillStyle = AMBER;
+        g.beginPath(); g.ellipse(0, 0, RXd, RYd, 0, 0, TAU); g.fill();
+        g.save();
+        g.beginPath(); g.ellipse(0, 0, RXd, RYd, 0, 0, TAU); g.clip();
+        g.fillStyle = 'rgba(242,102,91,0.5)';
+        g.beginPath(); g.ellipse(0, RYd * 0.55, RXd * 1.1, RYd * 0.85, 0, 0, TAU); g.fill();
+        g.fillStyle = 'rgba(245,233,220,0.16)';
+        g.beginPath(); g.ellipse(-face * RXd * 0.15, -RYd * 0.42, RXd * 0.6, RYd * 0.4, 0, 0, TAU); g.fill();
+        const spotFade = (1 - pf) * 0.5;
+        if (spotFade > 0.03) {
+          g.fillStyle = `rgba(242,102,91,${0.45 * spotFade})`;
+          for (let i = 0; i < NSPOT; i++) {
+            const sx = Math.cos(spotA[i]) * RXd * spotR[i] * -face;
+            const sy = -Math.abs(Math.sin(spotA[i])) * RYd * spotR[i] - RYd * 0.04;
+            g.beginPath(); g.ellipse(sx, sy, baseR * 0.08, baseR * 0.08, 0, 0, TAU); g.fill();
+          }
+        }
+        g.restore();
+        g.lineWidth = Math.max(2, baseR * 0.05);
+        g.strokeStyle = 'rgba(20,16,13,0.22)';
+        g.beginPath(); g.ellipse(0, 0, RXd, RYd, 0, 0, TAU); g.stroke();
+
+        // ---- pectoral fin (front) ----
+        if (finA > 0.02) {
+          g.save();
+          g.translate(face * RXd * 0.2, RYd * 0.34);
+          g.rotate(0.5 * Math.sin(t * 7 + 1) * face);
+          g.fillStyle = `rgba(88,166,242,${0.85 * finA})`;
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(face * RXd * 0.5, RYd * 0.42);
+          g.lineTo(face * RXd * 0.04, RYd * 0.6);
+          g.closePath(); g.fill();
+          g.restore();
+        }
+        g.restore();
+
+        // ================= FACE (world) =================
+        const eyeLX = face * RXd * 0.4, eyeLY = -RYd * 0.34;
+        const wex = fx + eyeLX * cosT - eyeLY * sinT;
+        const wey = fy + eyeLX * sinT + eyeLY * cosT;
+        const er = bodyRep * 0.36;
+        const ery = er * eyeOpen;
+
+        // brow: worried when alarmed, angry when deflating, gentle when calm
+        const browY0 = wey - ery * 0.9 - er * 0.35;
+        const bt = grump * er * 0.6 - alarm * er * 0.45;
+        const inX = wex + face * er * 0.85, inY = browY0 + bt;
+        const outX = wex - face * er * 0.55, outY = browY0 - bt * 0.4;
+        g.strokeStyle = 'rgba(20,16,13,0.85)';
+        g.lineWidth = Math.max(2.5, baseR * 0.12); g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(inX, inY);
+        g.quadraticCurveTo((inX + outX) * 0.5, (inY + outY) * 0.5 - er * 0.18, outX, outY);
+        g.stroke();
+
+        // eye
+        g.save();
+        g.translate(wex, wey);
+        g.fillStyle = CREAM;
+        g.beginPath(); g.ellipse(0, 0, er, ery, 0, 0, TAU); g.fill();
+        g.lineWidth = Math.max(1.5, baseR * 0.035);
+        g.strokeStyle = 'rgba(20,16,13,0.4)';
+        g.stroke();
+        if (eyeOpen > 0.3) {
+          const pr = er * (0.55 - 0.2 * alarm);
+          const offAmt = (er - pr) * 0.65 * (1 - 0.65 * alarm);
+          let ox = pupilX, oy = pupilY;
+          const ol = Math.hypot(ox, oy);
+          if (ol > 1) { ox /= ol; oy /= ol; }
+          const pxo = ox * offAmt;
+          const lim = Math.max(0, ery - pr);
+          const pyo = Math.max(-lim, Math.min(lim, oy * offAmt));
+          g.fillStyle = bg;
+          g.beginPath(); g.ellipse(pxo, pyo, pr, Math.min(pr, ery * 0.95), 0, 0, TAU); g.fill();
+          g.fillStyle = CREAM;
+          g.beginPath(); g.ellipse(pxo - pr * 0.35, pyo - pr * 0.4, pr * 0.3, pr * 0.3, 0, 0, TAU); g.fill();
+        }
+        g.restore();
+
+        // cheek blush when content
+        const blush = (1 - alarm) * (1 - grump);
+        if (blush > 0.08) {
+          g.fillStyle = `rgba(242,102,91,${0.35 * blush})`;
+          g.beginPath(); g.ellipse(wex + face * er * 0.1, wey + er * 0.9, er * 0.42, er * 0.28, 0, 0, TAU); g.fill();
+        }
+
+        // mouth: shocked O, grumpy frown, or calm smile
+        const mLX = face * RXd * 0.5, mLY = RYd * 0.44;
+        const wmx = fx + mLX * cosT - mLY * sinT;
+        const wmy = fy + mLX * sinT + mLY * cosT;
+        const msz = baseR * 0.5;
+        g.save(); g.translate(wmx, wmy);
+        if (alarm > 0.4) {
+          g.fillStyle = bg;
+          g.beginPath(); g.ellipse(0, 0, msz * 0.42 * alarm, msz * 0.52 * alarm, 0, 0, TAU); g.fill();
+          g.strokeStyle = 'rgba(242,102,91,0.7)'; g.lineWidth = Math.max(1.5, baseR * 0.05); g.stroke();
+        } else if (grump > 0.35) {
+          g.strokeStyle = 'rgba(20,16,13,0.8)'; g.lineWidth = Math.max(2, baseR * 0.09);
+          g.beginPath(); g.arc(0, msz * 0.5, msz * 0.6, TAU * 0.62, TAU * 0.88); g.stroke();
+        } else {
+          g.strokeStyle = 'rgba(20,16,13,0.75)'; g.lineWidth = Math.max(2, baseR * 0.08);
+          g.beginPath(); g.arc(0, -msz * 0.3, msz * 0.5, TAU * 0.12, TAU * 0.38); g.stroke();
+        }
+        g.restore();
+
+        lpx = px; lpy = py;
+      },
+      down(p) {
+        pdown = true; pinside = true; px = p.x; py = p.y;
+        if (Math.hypot(p.x - fx, p.y - fy) < curR * 1.2) startle(p.x, p.y);
+      },
+      move(p) {
+        px = p.x; py = p.y; pinside = true; pdown = p.held;
+      },
+      up(p) {
+        if (p) { px = p.x; py = p.y; }
+        pdown = false;
+      },
+      leave() {
+        pinside = false; pdown = false;
+      },
+      resize() { layout(); },
+    };
+  },
+});
+})();
+
+/* --- 46-split-flap.js --- */
+;(() => {
+/* № 46 — Split-flap. A four-drum station board. Each drum shows a character
+   split across a center seam; to change it, the top half folds down over the
+   seam in the classic mechanical flip, cascading through intermediate glyphs
+   and easing to a bouncing stop. Idle, the board keeps updating itself and
+   resting on short words. Click a drum to flip it; scroll to spin it fast. */
+F.register({
+  n: 46, id: 'split-flap', cat: 'mech',
+  title: 'Split-flap', hint: 'Click a dial to flip through it',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const N = CHARS.length;
+    const WORDS = ['PLAY', 'FLIP', 'SPIN', 'GLOW', 'WAVE', 'ZOOM', 'IDLE',
+      'SOON', 'GONE', 'OPEN', 'BOLT', 'GRIN', 'TICK', 'HUSH', 'DRUM', 'JOLT'];
+    const CREAM = inks[5], AMBER = inks[0], CORAL = inks[1];
+    const PANEL_T = '#2a2520', PANEL_B = '#1f1b16', FLAP = '#302a23',
+      SEAM = '#0c0a08', HOUSE = '#191410';
+
+    // motion / spring constants
+    const APPROACH = 7, MINFIN = 3.2, ACCEL = 16;   // forward-cascade easing
+    const STIFF = 185, DAMP = 12, KICK = 2.2, VREF = 9; // landing bounce
+
+    const drums = [];
+    for (let i = 0; i < 4; i++) drums.push({ pos: 0, vel: 0, target: 0, maxV: 22, sq: 0, sqV: 0, lastI: 0, lit: 0 });
+
+    let xs = [0, 0, 0, 0], cy = 0, dw = 0, dh = 0, rad = 6, pegR = 3;
+    let fontStr = '700 30px ui-monospace, Menlo, monospace';
+    let houseX = 0, houseY = 0, houseW = 0, houseH = 0;
+
+    function layout() {
+      const w = env.w, h = env.h;
+      const gapK = 0.16;
+      dw = (w * 0.9) / (4 + 3 * gapK);
+      const gap = dw * gapK;
+      dh = Math.min(dw * 1.55, h * 0.6);
+      rad = Math.max(3, Math.min(dw * 0.12, dh * 0.2));
+      pegR = Math.max(2.5, dw * 0.05);
+      cy = h * 0.5;
+      const totalW = dw * 4 + gap * 3;
+      const x0 = (w - totalW) / 2 + dw / 2;
+      for (let i = 0; i < 4; i++) xs[i] = x0 + i * (dw + gap);
+      fontStr = '700 ' + Math.max(8, Math.round(dh * 0.6)) + 'px ui-monospace, Menlo, monospace';
+      const padX = dw * 0.28, padY = dh * 0.16;
+      houseX = xs[0] - dw / 2 - padX;
+      houseW = (xs[3] + dw / 2 + padX) - houseX;
+      houseY = cy - dh / 2 - padY;
+      houseH = dh + padY * 2;
+    }
+    layout();
+
+    // sit exactly on the opening word
+    (function () {
+      const w = WORDS[0];
+      for (let i = 0; i < 4; i++) {
+        const li = CHARS.indexOf(w[i]);
+        drums[i].pos = li; drums[i].target = li; drums[i].lastI = li;
+      }
+    })();
+
+    let idleT = 0, idleNext = 1.3, wi = 0, hoverCol = -1, tNow = 0;
+
+    function setWord(word, fast) {
+      for (let i = 0; i < 4; i++) {
+        const d = drums[i];
+        const cur = ((Math.floor(d.target) % N) + N) % N;
+        const delta = (CHARS.indexOf(word[i]) - cur + N) % N;
+        d.target += delta;
+        d.maxV = fast ? 30 : 22;
+        if (delta > 0) d.lit = Math.max(d.lit, 0.6);
+      }
+    }
+    function flipColumn(i, steps, maxV) {
+      const d = drums[i];
+      d.target = Math.max(d.target, d.pos) + steps;
+      if (d.target - d.pos > 5 * N) d.target = d.pos + 5 * N;
+      d.maxV = maxV; d.lit = 1;
+    }
+    function colAt(x) {
+      let best = 0, bd = 1e18;
+      for (let i = 0; i < 4; i++) { const q = Math.abs(x - xs[i]); if (q < bd) { bd = q; best = i; } }
+      return best;
+    }
+    function scheduleIdle() {
+      if (Math.random() < 0.62) {
+        wi = (wi + 1 + (Math.random() * (WORDS.length - 1) | 0)) % WORDS.length;
+        setWord(WORDS[wi], false);
+      } else {
+        flipColumn(Math.random() * 4 | 0, 2 + (Math.random() * 5 | 0), 24);
+      }
+    }
+
+    function stepDrum(d, dt) {
+      if (d.target - d.pos > 5 * N) d.target = d.pos + 5 * N;
+      const rem = d.target - d.pos;
+      if (rem > 1e-4) {
+        const desired = Math.min(d.maxV, Math.max(MINFIN, rem * APPROACH));
+        d.vel += (desired - d.vel) * (1 - Math.exp(-ACCEL * dt));
+        d.pos += d.vel * dt;
+        const fl = Math.floor(d.pos);
+        if (fl !== d.lastI) {                       // a flap just landed
+          d.lastI = fl;
+          const slow = Math.max(0, 1 - d.vel / VREF);
+          d.sqV -= KICK * slow;
+          if (slow > 0.2) d.lit = Math.min(1, d.lit + 0.4 * slow);
+        }
+        if (d.pos >= d.target - 1e-3) {
+          d.pos = d.target; d.vel = 0;
+          const k = Math.floor(d.pos / N);           // keep indices small
+          if (k > 0) { d.pos -= k * N; d.target -= k * N; }
+          d.lastI = Math.floor(d.pos);
+        }
+      } else { d.vel = 0; }
+      d.sqV += (-d.sq * STIFF - d.sqV * DAMP) * dt;
+      d.sq += d.sqV * dt;
+      if (d.sq < -0.2) { d.sq = -0.2; if (d.sqV < 0) d.sqV = 0; }
+      if (d.sq > 0.12) { d.sq = 0.12; if (d.sqV > 0) d.sqV = 0; }
+      d.lit *= Math.pow(0.14, dt);
+    }
+
+    function rr(x, y, w, h, r) {
+      r = Math.min(r, w * 0.5, h * 0.5);
+      g.beginPath();
+      g.moveTo(x + r, y);
+      g.lineTo(x + w - r, y); g.quadraticCurveTo(x + w, y, x + w, y + r);
+      g.lineTo(x + w, y + h - r); g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      g.lineTo(x + r, y + h); g.quadraticCurveTo(x, y + h, x, y + h - r);
+      g.lineTo(x, y + r); g.quadraticCurveTo(x, y, x + r, y);
+      g.closePath();
+    }
+    function clipHalf(top, cx) {
+      const x0 = cx - dw / 2, x1 = cx + dw / 2, topY = cy - dh / 2, botY = cy + dh / 2, r = rad;
+      g.beginPath();
+      if (top) {
+        g.moveTo(x0, cy); g.lineTo(x0, topY + r); g.quadraticCurveTo(x0, topY, x0 + r, topY);
+        g.lineTo(x1 - r, topY); g.quadraticCurveTo(x1, topY, x1, topY + r); g.lineTo(x1, cy);
+      } else {
+        g.moveTo(x0, cy); g.lineTo(x1, cy); g.lineTo(x1, botY - r);
+        g.quadraticCurveTo(x1, botY, x1 - r, botY); g.lineTo(x0 + r, botY);
+        g.quadraticCurveTo(x0, botY, x0, botY - r);
+      }
+      g.closePath(); g.clip();
+    }
+
+    function drawDrum(d, i) {
+      const cx = xs[i];
+      const idx = ((Math.floor(d.pos) % N) + N) % N;
+      const C = CHARS[idx], D = CHARS[(idx + 1) % N];
+      let f = d.pos - Math.floor(d.pos);
+      if (!(f >= 0)) f = 0; if (f > 1) f = 1;
+
+      const halfH = dh / 2, topY = cy - halfH, x0 = cx - dw / 2;
+      const vs = Math.max(0.72, Math.min(1.12, 1 + d.sq));
+
+      g.save();
+      g.translate(cx, cy); g.scale(1, vs); g.translate(-cx, -cy);
+      g.font = fontStr; g.textAlign = 'center'; g.textBaseline = 'middle';
+
+      rr(x0, topY, dw, dh, rad); g.fillStyle = PANEL_B; g.fill();
+
+      // static cards behind the flaps: incoming top (D), outgoing bottom (C)
+      g.save(); clipHalf(true, cx);
+      g.fillStyle = PANEL_T; g.fillRect(x0, topY, dw, halfH + 0.6);
+      g.fillStyle = CREAM; g.fillText(D, cx, cy);
+      g.restore();
+      g.save(); clipHalf(false, cx);
+      g.fillStyle = PANEL_B; g.fillRect(x0, cy - 0.6, dw, halfH + 0.6);
+      g.fillStyle = CREAM; g.fillText(C, cx, cy);
+      g.fillStyle = 'rgba(0,0,0,0.16)'; g.fillRect(x0, cy, dw, halfH * 0.14);
+      g.restore();
+
+      // folding flap: top half (C) folds toward the seam, then the far face
+      // (bottom of D) folds down over the bottom — one continuous flip
+      if (f < 0.5) {
+        const sT = Math.cos((f / 0.5) * Math.PI / 2);
+        if (sT > 0.025) {
+          g.save(); clipHalf(true, cx);
+          g.translate(cx, cy); g.scale(1, sT); g.translate(-cx, -cy);
+          g.fillStyle = FLAP; g.fillRect(x0, topY, dw, halfH + 0.6);
+          g.fillStyle = CREAM; g.fillText(C, cx, cy);
+          g.fillStyle = 'rgba(8,6,4,' + (0.34 * (1 - sT)).toFixed(3) + ')';
+          g.fillRect(x0, topY, dw, halfH + 0.6);
+          g.restore();
+        }
+      } else {
+        const sB = Math.sin(((f - 0.5) / 0.5) * Math.PI / 2);
+        if (sB > 0.025) {
+          g.save(); clipHalf(false, cx);
+          g.translate(cx, cy); g.scale(1, sB); g.translate(-cx, -cy);
+          g.fillStyle = FLAP; g.fillRect(x0, cy - 0.6, dw, halfH + 0.6);
+          g.fillStyle = CREAM; g.fillText(D, cx, cy);
+          g.fillStyle = 'rgba(8,6,4,' + (0.34 * (1 - sB)).toFixed(3) + ')';
+          g.fillRect(x0, cy - 0.6, dw, halfH + 0.6);
+          g.restore();
+        }
+      }
+
+      // center seam
+      g.fillStyle = SEAM; g.fillRect(x0, cy - 1.3, dw, 2.6);
+      g.fillStyle = 'rgba(245,165,36,0.16)'; g.fillRect(x0, cy + 1.3, dw, 0.9);
+
+      // frame — warms to coral when active/hovered
+      rr(x0, topY, dw, dh, rad);
+      g.lineWidth = Math.max(2, dw * 0.045); g.lineJoin = 'round';
+      const glow = Math.max(d.lit, hoverCol === i ? 0.5 : 0);
+      g.strokeStyle = glow > 0.02
+        ? 'rgba(242,102,91,' + (0.35 + 0.5 * Math.min(1, glow)).toFixed(3) + ')'
+        : 'rgba(245,165,36,0.42)';
+      g.stroke();
+      g.restore();
+
+      // axle pegs on the seam (shimmer for continuous life)
+      const pa = 0.55 + 0.4 * Math.sin(tNow * 2.3 + i * 1.7);
+      g.fillStyle = 'rgba(245,165,36,' + pa.toFixed(3) + ')';
+      g.beginPath(); g.arc(x0, cy, pegR, 0, TAU); g.fill();
+      g.beginPath(); g.arc(x0 + dw, cy, pegR, 0, TAU); g.fill();
+    }
+
+    return {
+      draw(t, dt) {
+        tNow = t;
+        idleT += dt;
+        if (idleT >= idleNext) { idleT = 0; idleNext = 2.3 + Math.random() * 2.6; scheduleIdle(); }
+        for (let i = 0; i < 4; i++) stepDrum(drums[i], dt);
+
+        g.fillStyle = bg; g.fillRect(0, 0, env.w, env.h);
+
+        rr(houseX, houseY, houseW, houseH, rad * 1.3);
+        g.fillStyle = HOUSE; g.fill();
+        g.lineWidth = 2; g.strokeStyle = 'rgba(245,165,36,0.22)'; g.lineJoin = 'round'; g.stroke();
+        const led = 0.3 + 0.45 * (0.5 + 0.5 * Math.sin(tNow * 3.1));
+        g.fillStyle = 'rgba(245,165,36,' + led.toFixed(3) + ')';
+        g.beginPath(); g.arc(houseX + houseW - rad, houseY + rad, Math.max(2, pegR * 0.7), 0, TAU); g.fill();
+
+        for (let i = 0; i < 4; i++) drawDrum(drums[i], i);
+      },
+      down(p) {
+        idleT = 0; idleNext = Math.max(idleNext, 3.5);
+        const i = colAt(p.x);
+        flipColumn(i, 4 + (Math.random() * 4 | 0), 26);
+        drums[i].sqV -= 0.6;                          // immediate answer to the click
+      },
+      move(p) {
+        if (p.held) return;
+        if (p.x < houseX || p.x > houseX + houseW || p.y < houseY - 15 || p.y > houseY + houseH + 15) { hoverCol = -1; return; }
+        hoverCol = colAt(p.x);
+      },
+      wheel(dy, p) {
+        idleT = 0; idleNext = Math.max(idleNext, 3.5);
+        const i = colAt(p.x);
+        const steps = 3 + Math.min(7, Math.round(Math.abs(dy) / 45));
+        const d = drums[i];
+        d.target = Math.max(d.target, d.pos) + steps;
+        if (d.target - d.pos > 5 * N) d.target = d.pos + 5 * N;
+        d.maxV = 42; d.lit = 1;
+      },
+      dbl() {
+        idleT = 0; idleNext = Math.max(idleNext, 3.5);
+        wi = (wi + 1 + (Math.random() * (WORDS.length - 1) | 0)) % WORDS.length;
+        setWord(WORDS[wi], true);
+        for (let i = 0; i < 4; i++) drums[i].lit = 1;
+      },
+      leave() { hoverCol = -1; },
+      resize() { layout(); },
+    };
+  },
+});
+})();
+
+/* --- 47-frost-fern.js --- */
+;(() => {
+/* № 47 — Frost. Dendritic ice ferns creeping in from the cold edges of a dark
+   pane. At idle the frost advances tip by tip, branching at hexagonal angles
+   and thinning as it goes, until a fixed crystal pool fills and it only
+   shimmers. Drag to trail a chill and seed new ferns; double-click to breathe
+   warmth — the frost retreats and fades, freeing the glass to frost anew. */
+F.register({
+  n: 47, id: 'frost-fern', cat: 'matter',
+  title: 'Frost', hint: 'Drag a chill to grow frost — double-click melts',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const rgb = s => [1, 3, 5].map(k => parseInt(s.slice(k, k + 2), 16));
+    const mix = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+    const css = (c, a) => 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' + a + ')';
+    const SKYc = rgb(inks[3]), LILc = rgb(inks[4]), CREAMc = rgb(inks[5]), AMBERc = rgb(inks[0]);
+
+    // growth shape constants
+    const POOL = 340, TIERS = 5;
+    const MAXGEN = 4, SPINE_GEN = 2, SIDE_RATIO = 0.58, SPINE_RATIO = 0.8, SEED_RESERVE = 34;
+
+    // fixed crystal pool — allocated ONCE, never grown
+    const segs = new Array(POOL);
+    for (let i = 0; i < POOL; i++) {
+      segs[i] = { used: false, x0: 0, y0: 0, ang: 0, cx: 1, cy: 0, len: 0, tgt: 0,
+        node: 0, gap: 1, gen: 0, side: 1, grow: false, ci: 0, seed: 0, melt: 0, tx: 0, ty: 0 };
+    }
+    const free = [];
+    for (let i = POOL - 1; i >= 0; i--) free.push(i);
+
+    let m = 1, u = 1, haloW = 4, lastW = 1, lastH = 1;
+    const wTier = [], coreCss = [[], []];
+    function metrics() {
+      lastW = Math.max(1, env.w); lastH = Math.max(1, env.h); m = Math.min(lastW, lastH);
+      u = Math.max(0.7, Math.min(1.5, m / 360));
+      const baseW = [3.4, 2.5, 1.9, 1.4, 1.05];
+      for (let t = 0; t < TIERS; t++) wTier[t] = Math.max(0.85, baseW[t] * u);
+      for (let c = 0; c < 2; c++) {
+        const base = c ? LILc : SKYc;
+        for (let t = 0; t < TIERS; t++) {
+          coreCss[c][t] = css(mix(base, CREAMc, 0.32 + 0.55 * (t / (TIERS - 1))), 0.9);
+        }
+      }
+      haloW = wTier[0] + 3 * u;
+    }
+    metrics();
+
+    function spawn(x0, y0, ang, tgt, gen, ci) {
+      if (free.length === 0 || tgt < m * 0.02 || !isFinite(ang)) return;
+      const i = free.pop(), s = segs[i];
+      s.used = true; s.x0 = x0; s.y0 = y0; s.ang = ang;
+      s.cx = Math.cos(ang); s.cy = Math.sin(ang);
+      s.len = 0; s.tgt = tgt; s.gap = Math.max(m * 0.028, tgt * 0.34); s.node = s.gap;
+      s.gen = gen; s.side = Math.random() < 0.5 ? 1 : -1; s.grow = true;
+      s.ci = ci; s.seed = Math.random() * TAU; s.melt = 0;
+      s.tx = x0; s.ty = y0;            // valid tip even before first step (no NaN)
+    }
+    function freeSeg(i) {
+      const s = segs[i];
+      if (!s.used) return;
+      s.used = false; s.grow = false; free.push(i);
+    }
+    function seedEdge() {
+      if (free.length <= SEED_RESERVE) return;
+      const w = env.w, h = env.h, side = (Math.random() * 4) | 0, q = Math.random();
+      let x, y, a;
+      if (side === 0) { x = 0; y = q * h; a = 0; }            // left → creep right
+      else if (side === 1) { x = w; y = q * h; a = Math.PI; } // right → left
+      else if (side === 2) { x = q * w; y = 0; a = Math.PI / 2; } // top → down
+      else { x = q * w; y = h; a = -Math.PI / 2; }           // bottom → up
+      a += (Math.random() - 0.5) * 1.15;
+      spawn(x, y, a, m * (0.12 + Math.random() * 0.08), 0, Math.random() < 0.5 ? 0 : 1);
+    }
+    function seedDrag(x, y) {
+      x = Math.max(0, Math.min(env.w, x)); y = Math.max(0, Math.min(env.h, y));
+      let n = 1 + (Math.random() < 0.55 ? 1 : 0);
+      while (n-- > 0 && free.length > 6) {
+        spawn(x, y, Math.random() * TAU, m * (0.075 + Math.random() * 0.06), 0, Math.random() < 0.5 ? 0 : 1);
+      }
+    }
+
+    function stepAll(dt) {
+      const GROW = m * 0.45, MELT = 1.5, MINLEN = m * 0.02;
+      for (let i = 0; i < POOL; i++) {
+        const s = segs[i];
+        if (!s.used) continue;
+        if (s.melt > 0) {                                    // warmth: retract from the tip, fade
+          s.melt += MELT * (1 + 0.6 * s.gen) * dt;
+          s.len *= Math.pow(0.16, dt);
+          if (s.melt >= 1) { freeSeg(i); continue; }
+        } else if (s.grow) {
+          s.len += GROW * dt;
+          while (s.len >= s.node && s.gen < MAXGEN && free.length > 0 && s.tgt * SIDE_RATIO > MINLEN) {
+            const px = s.x0 + s.cx * s.node, py = s.y0 + s.cy * s.node;
+            s.side = -s.side;                                // alternate pinnae, hexagonal 60° bias
+            const ba = s.ang + s.side * (Math.PI / 3) + (Math.random() - 0.5) * 0.34;
+            spawn(px, py, ba, s.tgt * SIDE_RATIO, s.gen + 1, s.ci);
+            s.node += s.gap;
+          }
+          if (s.len >= s.tgt) {
+            s.len = s.tgt; s.grow = false;
+            if (s.gen <= SPINE_GEN && free.length > 0 && s.tgt * SPINE_RATIO > MINLEN) {
+              const tx = s.x0 + s.cx * s.tgt, ty = s.y0 + s.cy * s.tgt;
+              spawn(tx, ty, s.ang + (Math.random() - 0.5) * 0.3, s.tgt * SPINE_RATIO, s.gen, s.ci);
+            }
+          }
+        }
+        s.tx = s.x0 + s.cx * s.len; s.ty = s.y0 + s.cy * s.len;
+      }
+    }
+
+    let seedT = 0, hover = null, lastSeed = null;
+    const waves = [];                                        // {x,y,r,maxR}
+
+    // start already frosting: a few edge origins, pre-grown so idle is alive
+    for (let k = 0; k < 5; k++) seedEdge();
+    for (let k = 0; k < 20; k++) stepAll(0.04);
+
+    return {
+      draw(t, dt) {
+        const WARMTH = m * 1.7;
+        seedT -= dt;
+        if (seedT <= 0) { seedEdge(); seedT = 0.55 + Math.random() * 0.7; }
+
+        // warmth waves expand and mark frost roots for melting
+        if (waves.length) {
+          for (let wi = 0; wi < waves.length; wi++) waves[wi].r += WARMTH * dt;
+          for (let i = 0; i < POOL; i++) {
+            const s = segs[i];
+            if (!s.used || s.melt > 0) continue;
+            for (let wi = 0; wi < waves.length; wi++) {
+              const wv = waves[wi], dx = s.x0 - wv.x, dy = s.y0 - wv.y;
+              if (dx * dx + dy * dy < wv.r * wv.r) { s.melt = 1e-4; break; }
+            }
+          }
+          for (let wi = waves.length - 1; wi >= 0; wi--) if (waves[wi].r > waves[wi].maxR) waves.splice(wi, 1);
+        }
+
+        stepAll(dt);
+
+        g.fillStyle = bg;
+        g.fillRect(0, 0, env.w, env.h);
+        g.lineCap = 'round'; g.lineJoin = 'round';
+
+        // warmth glow beneath the frost — revealed as ice fades over it
+        for (let wi = 0; wi < waves.length; wi++) {
+          const wv = waves[wi], a = 0.16 * Math.max(0, 1 - wv.r / wv.maxR), r = Math.max(1, wv.r);
+          const rg = g.createRadialGradient(wv.x, wv.y, 0, wv.x, wv.y, r);
+          rg.addColorStop(0, css(AMBERc, a));
+          rg.addColorStop(0.55, css(AMBERc, a * 0.4));
+          rg.addColorStop(1, css(AMBERc, 0));
+          g.fillStyle = rg;
+          g.beginPath(); g.arc(wv.x, wv.y, r, 0, TAU); g.fill();
+        }
+
+        // soft halo bloom (bucketed by ink — one stroke each)
+        for (let c = 0; c < 2; c++) {
+          g.strokeStyle = css(c ? LILc : SKYc, 0.085);
+          g.lineWidth = haloW;
+          g.beginPath();
+          for (let i = 0; i < POOL; i++) {
+            const s = segs[i];
+            if (!s.used || s.melt > 0 || s.ci !== c) continue;
+            g.moveTo(s.x0, s.y0); g.lineTo(s.tx, s.ty);
+          }
+          g.stroke();
+        }
+        // bright crystal cores (bucketed by ink × generation tier)
+        for (let c = 0; c < 2; c++) {
+          for (let tr = 0; tr < TIERS; tr++) {
+            g.strokeStyle = coreCss[c][tr];
+            g.lineWidth = wTier[tr];
+            g.beginPath();
+            for (let i = 0; i < POOL; i++) {
+              const s = segs[i];
+              if (!s.used || s.melt > 0 || s.ci !== c) continue;
+              const tt = s.gen < TIERS ? s.gen : TIERS - 1;
+              if (tt !== tr) continue;
+              g.moveTo(s.x0, s.y0); g.lineTo(s.tx, s.ty);
+            }
+            g.stroke();
+          }
+        }
+        // melting frost — drawn individually so it can fade on its own
+        for (let i = 0; i < POOL; i++) {
+          const s = segs[i];
+          if (!s.used || s.melt <= 0) continue;
+          const a = Math.max(0, 1 - s.melt), tt = s.gen < TIERS ? s.gen : TIERS - 1;
+          g.strokeStyle = css(mix(s.ci ? LILc : SKYc, CREAMc, 0.4), 0.85 * a);
+          g.lineWidth = Math.max(0.6, wTier[tt] * (0.5 + 0.5 * a));
+          g.beginPath(); g.moveTo(s.x0, s.y0); g.lineTo(s.tx, s.ty); g.stroke();
+        }
+        // advancing frost front — a bright bead at each live tip
+        g.fillStyle = css(CREAMc, 0.85);
+        for (let i = 0; i < POOL; i++) {
+          const s = segs[i];
+          if (!s.used || s.melt > 0 || !s.grow || s.gen > 2) continue;
+          g.beginPath(); g.arc(s.tx, s.ty, 1.5 * u, 0, TAU); g.fill();
+        }
+        // faint shimmer — twinkles that persist once growth has capped out
+        for (let i = 0; i < POOL; i += 5) {
+          const s = segs[i];
+          if (!s.used || s.melt > 0) continue;
+          const tw = Math.sin(t * 2.2 + s.seed);
+          if (tw > 0.55) {
+            g.fillStyle = css(CREAMc, (tw - 0.55) * 0.8);
+            g.beginPath(); g.arc(s.tx, s.ty, 1.3 * u, 0, TAU); g.fill();
+          }
+        }
+        // cold breath under the hovering pointer — a "grab me" affordance
+        if (hover) {
+          g.strokeStyle = css(SKYc, 0.16 + 0.08 * Math.sin(t * 3));
+          g.lineWidth = 2 * u;
+          g.beginPath(); g.arc(hover.x, hover.y, m * 0.05 * (1 + 0.06 * Math.sin(t * 3)), 0, TAU); g.stroke();
+        }
+      },
+      down(p) { hover = null; lastSeed = { x: p.x, y: p.y }; seedDrag(p.x, p.y); },
+      move(p) {
+        if (p.held) {
+          hover = null;
+          if (lastSeed) {
+            const dx = p.x - lastSeed.x, dy = p.y - lastSeed.y, gap = m * 0.06;
+            if (dx * dx + dy * dy > gap * gap) { seedDrag(p.x, p.y); lastSeed = { x: p.x, y: p.y }; }
+          }
+        } else hover = { x: p.x, y: p.y };
+      },
+      up() { lastSeed = null; },
+      dbl(p) {
+        waves.push({ x: p.x, y: p.y, r: m * 0.02, maxR: Math.hypot(env.w, env.h) * 1.05 });
+        if (waves.length > 4) waves.shift();
+      },
+      leave() { hover = null; lastSeed = null; },
+      resize() {
+        let rx = Math.max(1, env.w) / lastW, ry = Math.max(1, env.h) / lastH;
+        if (!isFinite(rx) || rx <= 0) rx = 1;
+        if (!isFinite(ry) || ry <= 0) ry = 1;
+        const sc = Math.sqrt(rx * ry);
+        for (let i = 0; i < POOL; i++) {
+          const s = segs[i];
+          if (!s.used) continue;
+          s.x0 *= rx; s.y0 *= ry; s.len *= sc; s.tgt *= sc; s.node *= sc; s.gap *= sc;
+          s.tx = s.x0 + s.cx * s.len; s.ty = s.y0 + s.cy * s.len;
+        }
+        for (let wi = 0; wi < waves.length; wi++) {
+          waves[wi].x *= rx; waves[wi].y *= ry; waves[wi].r *= sc; waves[wi].maxR *= sc;
+        }
+        lastSeed = null; hover = null;
+        metrics();
+      },
+    };
+  },
+});
+})();
+
+/* --- 48-caustics.js --- */
+;(() => {
+/* № 48 — Caustics. The bright, shifting web of light on a sunlit pool floor.
+   A handful of slow sine "flows" stand in for the water surface acting as a
+   lens: their summed displacement folds a fine light-grid onto itself, and
+   where the folds pile up — each line stroked additively — the caustic net
+   glows. Drag to disturb the surface: ripples race out from your finger and
+   bend the web along their crests. Soft god-rays sink from above. No second
+   canvas, no per-pixel loop — just additive strokes over a deep-water floor. */
+F.register({
+  n: 48, id: 'caustics', cat: 'optics',
+  title: 'Caustics', hint: 'Ripple the water — light dances below',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+
+    // The morphing surface: a few slow longitudinal sine flows whose sum
+    // compresses the light map into caustic folds. Seeded once so the idle
+    // motion is stable and never flickers.
+    const waves = [];
+    const NW = 5;
+    let sumA = 0;
+    for (let k = 0; k < NW; k++) {
+      const ang = Math.random() * TAU;
+      const a = 0.6 + Math.random() * 0.7;
+      sumA += a;
+      waves.push({
+        cx: Math.cos(ang), cy: Math.sin(ang),          // propagation direction
+        fRel: 0.45 + Math.random() * 1.05,             // wavelength ÷ card size
+        w: (0.14 + Math.random() * 0.34) * (Math.random() < 0.5 ? -1 : 1),
+        ph: Math.random() * TAU, aN: 0, f: 0,
+      });
+    }
+    for (const wv of waves) wv.aN = (0.6 + Math.random() * 0.7) / sumA; // normalized
+
+    // Ripples: expanding crests from the pointer that warp the web.
+    const MAXR = 8;
+    const ripples = [];
+    function addRipple(x, y, amp, spd) {
+      const W = Math.max(14, sp * 0.55);
+      ripples.push({
+        x, y, age: 0, amp, spd, R: 0, curAmp: amp,
+        W, band: W * 2.6, inv2: 1 / (W * W), kk: TAU / (W * 2.4),
+      });
+      if (ripples.length > MAXR) ripples.splice(0, ripples.length - MAXR);
+    }
+
+    // Warped light-grid buffers, sized in sizeGrid() / resize().
+    let sp = 40, baseAmp = 30;
+    let nH = 0, nHS = 0, nV = 0, nVS = 0, stepH = 0, stepV = 0, gx0 = 0, gy0 = 0;
+    let hx, hy, vx, vy, builtW = 0, builtH = 0;
+
+    function sizeGrid() {
+      const w = Math.max(1, env.w), h = Math.max(1, env.h), m = Math.min(w, h);
+      sp = m / 8;
+      baseAmp = sp * 0.9;                              // enough to fold the grid
+      for (const wv of waves) wv.f = TAU / (m * wv.fRel);
+      const margin = sp * 1.6;                         // cover corners when warped
+      gx0 = -margin; gy0 = -margin;
+      const spanW = w + margin * 2, spanH = h + margin * 2;
+      stepH = stepV = sp / 2.6;                        // sample finer than spacing
+      nH = Math.ceil(spanH / sp) + 1;
+      nV = Math.ceil(spanW / sp) + 1;
+      nHS = Math.ceil(spanW / stepH) + 1;
+      nVS = Math.ceil(spanH / stepV) + 1;
+      hx = new Float32Array(nH * nHS); hy = new Float32Array(nH * nHS);
+      vx = new Float32Array(nV * nVS); vy = new Float32Array(nV * nVS);
+      builtW = env.w; builtH = env.h;
+    }
+    sizeGrid();
+
+    // The pool is already alive on first sight.
+    addRipple(env.w * 0.40, env.h * 0.36, 9, 140);
+    addRipple(env.w * 0.66, env.h * 0.62, 7, 120);
+    let ambient = 1.8;
+
+    // Displacement of the light map at (x, y), written into D (reused).
+    const D = [0, 0];
+    let frameAmp = baseAmp;
+    function disp(x, y, t) {
+      let ex = 0, ey = 0;
+      for (let k = 0; k < waves.length; k++) {
+        const wv = waves[k];
+        const s = Math.sin((x * wv.cx + y * wv.cy) * wv.f + wv.w * t + wv.ph);
+        ex += wv.aN * s * wv.cx;
+        ey += wv.aN * s * wv.cy;
+      }
+      ex *= frameAmp; ey *= frameAmp;
+      for (let k = 0; k < ripples.length; k++) {
+        const r = ripples[k];
+        const dx = x - r.x, dy = y - r.y;
+        const d = Math.sqrt(dx * dx + dy * dy) + 1e-6;
+        const e = d - r.R;
+        if (e < -r.band || e > r.band) continue;       // outside the crest band
+        const dv = r.curAmp * Math.exp(-e * e * r.inv2) * Math.cos(e * r.kk);
+        ex += dv * dx / d; ey += dv * dy / d;
+      }
+      if (ex > 260) ex = 260; else if (ex < -260) ex = -260;
+      if (ey > 260) ey = 260; else if (ey < -260) ey = -260;
+      D[0] = ex; D[1] = ey;
+    }
+
+    // Each line is its own stroke so converging lines stack additively into
+    // bright caustic filaments (a single path would just union, not brighten).
+    function strokeFamily(px, py, nLines, nSamp, style) {
+      g.strokeStyle = style;
+      for (let j = 0; j < nLines; j++) {
+        let idx = j * nSamp;
+        g.beginPath();
+        g.moveTo(px[idx], py[idx]);
+        for (let i = 1; i < nSamp; i++) { idx++; g.lineTo(px[idx], py[idx]); }
+        g.stroke();
+      }
+    }
+
+    let glow = 0, glowX = 0, glowY = 0, lastX = 0, lastY = 0, dragAcc = 0, have = false;
+
+    return {
+      draw(t, dt) {
+        if (env.w !== builtW || env.h !== builtH) sizeGrid();
+        const w = env.w, h = env.h, m = Math.min(w, h), diag = Math.hypot(w, h);
+
+        // Advance + cull ripples in place (no per-frame allocation).
+        let n = 0;
+        for (let i = 0; i < ripples.length; i++) {
+          const r = ripples[i];
+          r.age += dt;
+          r.R = r.spd * r.age;
+          r.curAmp = r.amp * Math.exp(-r.age * 1.5);
+          if (r.curAmp > 0.25 && r.R < diag * 1.3) ripples[n++] = r;
+        }
+        ripples.length = n;
+
+        // A gentle disturbance now and then so idle water keeps breathing.
+        ambient -= dt;
+        if (ambient <= 0) {
+          addRipple(w * (0.15 + Math.random() * 0.7), h * (0.15 + Math.random() * 0.7),
+            5 + Math.random() * 4, 110 + Math.random() * 50);
+          ambient = 2.6 + Math.random() * 2.4;
+        }
+
+        glow *= Math.pow(0.05, dt);
+        frameAmp = baseAmp * (0.82 + 0.18 * Math.sin(t * 0.3));   // slow breath
+
+        // Warp the light-grid.
+        for (let j = 0; j < nH; j++) {
+          const by = gy0 + j * sp; let idx = j * nHS;
+          for (let i = 0; i < nHS; i++) {
+            const bx = gx0 + i * stepH; disp(bx, by, t);
+            hx[idx] = bx + D[0]; hy[idx] = by + D[1]; idx++;
+          }
+        }
+        for (let j = 0; j < nV; j++) {
+          const bx = gx0 + j * sp; let idx = j * nVS;
+          for (let i = 0; i < nVS; i++) {
+            const by = gy0 + i * stepV; disp(bx, by, t);
+            vx[idx] = bx + D[0]; vy[idx] = by + D[1]; idx++;
+          }
+        }
+
+        // Floor: warm ground with a deep pool of blue sunk into the middle.
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        const fg = g.createRadialGradient(w * 0.5, h * 0.42, m * 0.04,
+          w * 0.5, h * 0.52, diag * 0.62);
+        fg.addColorStop(0, 'rgba(34,74,92,0.55)');
+        fg.addColorStop(1, 'rgba(34,74,92,0)');
+        g.fillStyle = fg; g.fillRect(0, 0, w, h);
+
+        // From here down it is all light — add it.
+        g.globalCompositeOperation = 'lighter';
+        g.lineJoin = 'round'; g.lineCap = 'round';
+
+        // God-rays sinking from the surface, swaying slowly.
+        for (let i = 0; i < 3; i++) {
+          const cx = ((i + 0.5) / 3 + Math.sin(t * 0.13 + i * 2.2) * 0.07) * w;
+          const tw = m * 0.02, bw = m * 0.17;
+          const rg = g.createLinearGradient(0, 0, 0, h);
+          rg.addColorStop(0, 'rgba(120,190,245,0.10)');
+          rg.addColorStop(1, 'rgba(120,190,245,0)');
+          g.fillStyle = rg;
+          g.beginPath();
+          g.moveTo(cx - tw, 0); g.lineTo(cx + tw, 0);
+          g.lineTo(cx + bw, h); g.lineTo(cx - bw, h);
+          g.closePath(); g.fill();
+        }
+
+        // The caustic web: a soft coloured halo, then a hot cream core.
+        g.lineWidth = Math.max(2.4, m * 0.014);
+        strokeFamily(hx, hy, nH, nHS, 'rgba(88,166,242,0.055)');   // sky halo
+        strokeFamily(vx, vy, nV, nVS, 'rgba(79,201,160,0.055)');   // mint halo
+        g.lineWidth = Math.max(1.1, m * 0.006);
+        strokeFamily(hx, hy, nH, nHS, 'rgba(242,233,220,0.09)');   // cream core
+        strokeFamily(vx, vy, nV, nVS, 'rgba(242,233,220,0.09)');
+
+        // Travelling crests, faint and minty, so a disturbance reads at once.
+        for (let i = 0; i < ripples.length; i++) {
+          const r = ripples[i];
+          const a = Math.min(0.22, r.curAmp * 0.018);
+          if (r.R < 3 || a < 0.01) continue;
+          g.strokeStyle = 'rgba(150,222,205,' + a.toFixed(3) + ')';
+          g.lineWidth = Math.max(1.5, r.W * 0.22);
+          g.beginPath(); g.arc(r.x, r.y, r.R, 0, TAU); g.stroke();
+        }
+
+        // Light gathering under the fingertip — springs up on touch, fades.
+        if (glow > 0.01) {
+          const rad = Math.max(9, m * 0.13), a = Math.min(0.5, glow * 0.5);
+          const bl = g.createRadialGradient(glowX, glowY, 0, glowX, glowY, rad);
+          bl.addColorStop(0, 'rgba(242,233,220,' + a.toFixed(3) + ')');
+          bl.addColorStop(1, 'rgba(242,233,220,0)');
+          g.fillStyle = bl;
+          g.beginPath(); g.arc(glowX, glowY, rad, 0, TAU); g.fill();
+        }
+
+        g.globalCompositeOperation = 'source-over';
+      },
+
+      down(p) {
+        addRipple(p.x, p.y, 22, 165);
+        glow = 1; glowX = p.x; glowY = p.y;
+        lastX = p.x; lastY = p.y; dragAcc = 0; have = true;
+      },
+      move(p) {
+        if (!p.held) { have = false; return; }
+        if (!have) { lastX = p.x; lastY = p.y; have = true; }
+        dragAcc += Math.hypot(p.x - lastX, p.y - lastY);
+        glow = Math.min(1, glow + 0.6); glowX = p.x; glowY = p.y;
+        if (dragAcc > sp * 0.5) { addRipple(p.x, p.y, 15, 158); dragAcc = 0; }
+        lastX = p.x; lastY = p.y;
+      },
+      up() { have = false; dragAcc = 0; },
+      dbl(p) { addRipple(p.x, p.y, 34, 205); glow = 1; glowX = p.x; glowY = p.y; },
+      leave() { have = false; dragAcc = 0; },
+      resize() { sizeGrid(); },
+    };
+  },
+});
+})();
+
+/* --- 49-inchworm.js --- */
+;(() => {
+/* № 49 — Inchworm. A looper caterpillar that humps and stretches its way
+   around the card, patrolling on its own and rearing up to look about. Tap
+   ahead and it turns, then inches over with the classic gait: the front foot
+   plants, the back humps up and draws in, the front reaches out and plants —
+   a travelling arch running down a springy, segmented body. */
+F.register({
+  n: 49, id: 'inchworm', cat: 'critters',
+  title: 'Inchworm', hint: 'Tap ahead — the inchworm humps along to it',
+  make(env) {
+    const { g, inks, bg } = env;
+    const TAU = Math.PI * 2;
+    const MINT = inks[2], AMBER = inks[0], CREAM = inks[5];
+    const OUT = '#3D765E';                 // darker mint — outline / segment creases
+    const M = 18;                          // spine nodes: tail=0 .. head=M-1
+    const NS = 34;                         // bezier samples for arc-length resample
+    const X = new Float64Array(M), Y = new Float64Array(M);
+    const PX = new Float64Array(M), PY = new Float64Array(M);
+    const TX = new Float64Array(M), TY = new Float64Array(M);
+    const BX = new Float64Array(NS), BY = new Float64Array(NS), CL = new Float64Array(NS);
+    const RAD = new Float64Array(M);
+
+    let S = 120, gap = 26, Rmid = 10;      // sizes (set in layout)
+    let heading = 0.15;                    // facing angle
+    let gp = 0;                            // gait phase [0,1)
+    let planted = 1;                       // 1 = head planted (hump), 0 = tail planted (stretch)
+    let plantX = 0, plantY = 0;            // the planted foot
+    let tgX = 0, tgY = 0;                  // goal point
+    let pursue = 0;                        // 1 while chasing a tap
+    let speed = 0, hump = 0;               // gait rate, current arch amount
+    let wander = 2.0;                      // countdown to next idle waypoint
+    let rear = 0, rearDur = 0, nextRear = 4.5;   // rear-up-to-look state
+    let alert = 0, blink = 0, nextBlink = 3;
+
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+    const ease = u => u * u * (3 - 2 * u);
+    const clampX = x => clamp(x, 0.10 * env.w, 0.90 * env.w);
+    const clampY = y => clamp(y, 0.12 * env.h, 0.88 * env.h);
+    function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU; return d; }
+    function clampPlant() {
+      const p = 0.12 * Math.min(env.w, env.h);
+      plantX = clamp(plantX, p, env.w - p); plantY = clamp(plantY, p, env.h - p);
+    }
+    function pickWander() {
+      tgX = 0.20 * env.w + Math.random() * 0.60 * env.w;
+      tgY = 0.22 * env.h + Math.random() * 0.60 * env.h;
+      wander = 2.4 + Math.random() * 3.0;
+    }
+
+    function layout(reset) {
+      const m = Math.min(env.w, env.h);
+      S = 0.40 * m; gap = 0.22 * S; Rmid = 0.088 * S;
+      if (reset) {
+        plantX = 0.5 * env.w; plantY = 0.60 * env.h;
+        gp = 0; planted = 1; heading = 0.15; speed = 0;
+        const dx = Math.cos(heading), dy = Math.sin(heading);
+        for (let j = 0; j < M; j++) {          // start stretched out behind the head
+          const u = j / (M - 1);
+          X[j] = PX[j] = plantX - dx * S * (1 - u);
+          Y[j] = PY[j] = plantY - dy * S * (1 - u);
+        }
+        pickWander();
+      }
+      clampPlant();
+      tgX = clampX(tgX); tgY = clampY(tgY);
+    }
+    layout(true);
+
+    // --- gait -> target skeleton (feet + a cubic-bezier arch, arc-length even) ---
+    function computeTargets() {
+      const dx = Math.cos(heading), dy = Math.sin(heading);
+      let upx = -dy, upy = dx;
+      if (upy > 0) { upx = -upx; upy = -upy; }  // arch always bulges toward screen-up
+      const hop = 0.085 * S;
+      let F0x, F0y, F1x, F1y;
+      if (planted === 1) {                       // HUMP: head planted, tail draws up and in
+        const u = clamp(gp / 0.5, 0, 1);
+        const td = S + (gap - S) * ease(u), lf = hop * Math.sin(Math.PI * u);
+        F1x = plantX; F1y = plantY;
+        F0x = plantX - dx * td + upx * lf; F0y = plantY - dy * td + upy * lf;
+      } else {                                   // STRETCH: tail planted, head reaches out
+        const u = clamp((gp - 0.5) / 0.5, 0, 1);
+        const hd = gap + (S - gap) * ease(u), lf = hop * Math.sin(Math.PI * u);
+        F0x = plantX; F0y = plantY;
+        F1x = plantX + dx * hd + upx * lf; F1y = plantY + dy * hd + upy * lf;
+      }
+      if (rear > 0.001) { F1x += upx * 0.34 * S * rear; F1y += upy * 0.34 * S * rear; }
+
+      const ddx = F1x - F0x, ddy = F1y - F0y;
+      const d = Math.hypot(ddx, ddy) + 1e-6;
+      hump = clamp((S - d) / (S - gap + 1e-6), 0, 1);
+      const cpUp = 0.72 * Math.sqrt(Math.max(0, S * S - d * d));  // fold slack upward
+      const ax = ddx / d, ay = ddy / d;
+      const c1x = F0x + ax * d * 0.28 + upx * cpUp, c1y = F0y + ay * d * 0.28 + upy * cpUp;
+      const c2x = F1x - ax * d * 0.28 + upx * cpUp, c2y = F1y - ay * d * 0.28 + upy * cpUp;
+
+      let px = F0x, py = F0y; BX[0] = F0x; BY[0] = F0y; CL[0] = 0;
+      for (let s = 1; s < NS; s++) {
+        const u = s / (NS - 1), iu = 1 - u;
+        const b0 = iu * iu * iu, b1 = 3 * iu * iu * u, b2 = 3 * iu * u * u, b3 = u * u * u;
+        const bx = b0 * F0x + b1 * c1x + b2 * c2x + b3 * F1x;
+        const by = b0 * F0y + b1 * c1y + b2 * c2y + b3 * F1y;
+        BX[s] = bx; BY[s] = by;
+        CL[s] = CL[s - 1] + Math.hypot(bx - px, by - py);
+        px = bx; py = by;
+      }
+      const total = CL[NS - 1] + 1e-6;
+      let seg = 1;
+      for (let j = 0; j < M; j++) {
+        const want = total * (j / (M - 1));
+        while (seg < NS - 1 && CL[seg] < want) seg++;
+        const f = (want - CL[seg - 1]) / (CL[seg] - CL[seg - 1] + 1e-6);
+        TX[j] = BX[seg - 1] + (BX[seg] - BX[seg - 1]) * f;
+        TY[j] = BY[seg - 1] + (BY[seg] - BY[seg - 1]) * f;
+      }
+    }
+
+    function step(dt) {
+      const K = 170, damp = 0.85, maxV = 0.5 * S;
+      for (let j = 0; j < M; j++) {
+        let vx = (X[j] - PX[j]) * damp, vy = (Y[j] - PY[j]) * damp;
+        const vm = Math.hypot(vx, vy);
+        if (vm > maxV) { vx *= maxV / vm; vy *= maxV / vm; }
+        PX[j] = X[j]; PY[j] = Y[j];
+        X[j] += vx + (TX[j] - X[j]) * K * dt * dt;
+        Y[j] += vy + (TY[j] - Y[j]) * K * dt * dt;
+      }
+      for (let j = 1; j < M - 1; j++) {          // gentle smoothing keeps the tube clean
+        X[j] += ((X[j - 1] + X[j + 1]) * 0.5 - X[j]) * 0.10;
+        Y[j] += ((Y[j - 1] + Y[j + 1]) * 0.5 - Y[j]) * 0.10;
+      }
+      const pj = planted === 1 ? M - 1 : 0;      // pin the planted foot — no slip
+      X[pj] = TX[pj]; Y[pj] = TY[pj]; PX[pj] = X[pj]; PY[pj] = Y[pj];
+      if (X[M - 1] !== X[M - 1] || Y[0] !== Y[0]) layout(true);   // NaN insurance
+    }
+
+    function drawBody(t) {
+      const breathe = 1 + 0.03 * Math.sin(t * 2.1);
+      for (let j = 0; j < M; j++) {
+        const u = j / (M - 1);
+        let pr = 0.60 + 0.40 * Math.sin(Math.PI * Math.pow(u, 0.85));
+        pr *= 1 + 0.16 * hump * Math.sin(Math.PI * u);   // squash on the hump
+        RAD[j] = Rmid * pr * breathe;
+      }
+      g.lineJoin = 'round'; g.lineCap = 'round';
+      // body: overlapping circles, each ringed — later circles hide the front of
+      // the previous ring, so a dark tail-side crease shows on every segment
+      g.lineWidth = Math.max(2, Rmid * 0.26);
+      for (let j = 0; j < M - 1; j++) {
+        g.fillStyle = MINT;
+        g.beginPath(); g.arc(X[j], Y[j], RAD[j], 0, TAU); g.fill();
+        g.strokeStyle = OUT; g.stroke();
+      }
+      // amber dorsal spots on alternate segments
+      g.fillStyle = AMBER;
+      for (let j = 2; j < M - 2; j += 2) {
+        let nx = -(Y[j + 1] - Y[j - 1]), ny = (X[j + 1] - X[j - 1]);
+        const nl = Math.hypot(nx, ny) + 1e-6; nx /= nl; ny /= nl;
+        const s = ny > 0 ? -1 : 1;
+        g.beginPath();
+        g.arc(X[j] + nx * s * RAD[j] * 0.30, Y[j] + ny * s * RAD[j] * 0.30, RAD[j] * 0.26, 0, TAU);
+        g.fill();
+      }
+
+      // head frame from the facing direction (robust, and it reads as "looking ahead")
+      const hxp = X[M - 1], hyp = Y[M - 1];
+      const fx = Math.cos(heading), fy = Math.sin(heading);
+      let ux = -fy, uy = fx; if (uy > 0) { ux = -ux; uy = -uy; }
+      const Rh = Rmid * 1.35 * breathe;
+
+      // antennae (behind the face) with amber tip-knobs
+      const antL = Rh * 1.55 * (1 + 0.18 * alert);
+      const bx = hxp + fx * Rh * 0.2 + ux * Rh * 0.7, by = hyp + fy * Rh * 0.2 + uy * Rh * 0.7;
+      g.strokeStyle = AMBER; g.lineWidth = Math.max(2, Rh * 0.16);
+      for (let s = -1; s <= 1; s += 2) {
+        const wob = 0.42 * Math.sin(t * 3.2 + s * 1.6) * (0.55 + 0.9 * alert);
+        const ang = Math.atan2(uy, ux) + s * 0.42 + wob;
+        const tx = bx + Math.cos(ang) * antL, ty = by + Math.sin(ang) * antL;
+        const cx = bx + Math.cos(ang) * antL * 0.5 + fx * antL * 0.16;
+        const cy = by + Math.sin(ang) * antL * 0.5 + fy * antL * 0.16;
+        g.beginPath(); g.moveTo(bx, by); g.quadraticCurveTo(cx, cy, tx, ty); g.stroke();
+        g.fillStyle = AMBER; g.beginPath(); g.arc(tx, ty, Math.max(2.2, Rh * 0.2), 0, TAU); g.fill();
+      }
+
+      // cream face with a mint rim
+      g.fillStyle = CREAM; g.beginPath(); g.arc(hxp, hyp, Rh, 0, TAU); g.fill();
+      g.strokeStyle = MINT; g.lineWidth = Math.max(2.2, Rh * 0.2);
+      g.beginPath(); g.arc(hxp, hyp, Rh, 0, TAU); g.stroke();
+
+      // eyes (blink) + a small smile
+      const sx = -fy, sy = fx;
+      const eo = Rh * 0.40, ef = Rh * 0.26, eup = Rh * 0.08;
+      for (let s = -1; s <= 1; s += 2) {
+        const ex = hxp + fx * ef + sx * s * eo + ux * eup;
+        const ey = hyp + fy * ef + sy * s * eo + uy * eup;
+        if (blink > 0) {
+          g.strokeStyle = OUT; g.lineWidth = Math.max(2, Rh * 0.14);
+          g.beginPath();
+          g.moveTo(ex - sx * Rh * 0.17, ey - sy * Rh * 0.17);
+          g.lineTo(ex + sx * Rh * 0.17, ey + sy * Rh * 0.17);
+          g.stroke();
+        } else {
+          g.fillStyle = bg; g.beginPath(); g.arc(ex, ey, Rh * 0.24, 0, TAU); g.fill();
+          g.fillStyle = CREAM;
+          g.beginPath(); g.arc(ex - fx * Rh * 0.05 + ux * Rh * 0.06, ey - fy * Rh * 0.05 + uy * Rh * 0.06, Rh * 0.08, 0, TAU); g.fill();
+        }
+      }
+      g.strokeStyle = OUT; g.lineWidth = Math.max(1.6, Rh * 0.1);
+      const a0 = Math.atan2(fy, fx);
+      g.beginPath(); g.arc(hxp + fx * Rh * 0.46, hyp + fy * Rh * 0.46, Rh * 0.3, a0 - 1.05, a0 + 1.05); g.stroke();
+    }
+
+    return {
+      draw(t, dt) {
+        const hxp = X[M - 1], hyp = Y[M - 1];
+        const dist = Math.hypot(tgX - hxp, tgY - hyp);
+        const arriveR = 0.30 * S;
+
+        // turn toward the goal — immediate but eased
+        const dh = angDiff(Math.atan2(tgY - hyp, tgX - hxp), heading);
+        const maxStep = (pursue ? 3.0 : 2.0) * dt;
+        heading += clamp(dh * clamp(dt * 4.5, 0, 1), -maxStep, maxStep);
+
+        // idle waypoints / arrival
+        wander -= dt;
+        if (!pursue) { if (dist < arriveR || wander <= 0) pickWander(); }
+        else if (dist < arriveR * 0.7) { pursue = 0; pickWander(); }
+
+        // rear up to look around (idle only)
+        nextRear -= dt;
+        if (!pursue && rearDur <= 0 && nextRear <= 0 && dist > arriveR) {
+          rearDur = 1.7; nextRear = 6 + Math.random() * 6; alert = 1;
+        }
+        if (rearDur > 0) rearDur -= dt;
+        rear += (((rearDur > 0 && !pursue) ? 1 : 0) - rear) * clamp(dt * 4, 0, 1);
+        if (rear > 0.01 && !pursue) heading += Math.sin(t * 1.7) * 1.0 * dt * rear;
+
+        // gait speed: fast when pursuing, eased to rest near the goal and while rearing
+        const moveGate = clamp((dist - arriveR * 0.6) / (arriveR * 1.4), 0, 1);
+        const tSpeed = (pursue ? 0.82 : 0.44) * moveGate * (1 - 0.92 * rear);
+        speed += (tSpeed - speed) * clamp(dt * 3, 0, 1);
+        gp += speed * dt;
+        if (gp >= 1) gp -= 1;
+
+        // re-plant the trailing foot at each half-cycle
+        const dx = Math.cos(heading), dy = Math.sin(heading);
+        if (gp < 0.5 && planted === 0) { plantX += dx * S; plantY += dy * S; planted = 1; clampPlant(); }
+        else if (gp >= 0.5 && planted === 1) { plantX -= dx * gap; plantY -= dy * gap; planted = 0; clampPlant(); }
+
+        alert += (0 - alert) * clamp(dt * 1.5, 0, 1);
+        nextBlink -= dt;
+        if (nextBlink <= 0 && blink <= 0) { blink = 0.16; nextBlink = 2.5 + Math.random() * 3.5; }
+        if (blink > 0) blink -= dt;
+
+        computeTargets();
+        step(dt);
+
+        g.fillStyle = bg; g.fillRect(0, 0, env.w, env.h);
+        drawBody(t);
+      },
+      down(p) { tgX = clampX(p.x); tgY = clampY(p.y); pursue = 1; alert = 1; rearDur = 0; nextRear = 5 + Math.random() * 4; },
+      move(p) { if (p.held) { tgX = clampX(p.x); tgY = clampY(p.y); pursue = 1; } },
+      up() { },
+      resize() { layout(false); },
     };
   },
 });
