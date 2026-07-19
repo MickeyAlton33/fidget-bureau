@@ -1,9 +1,10 @@
 /* № 26 — Ratchet & pawl. A sky sawtooth wheel, an amber hand-lever carrying a
-   coral driving pawl, and a fixed coral holding pawl — each on its own little
-   spring. Rock the lever: forward strokes ratchet the wheel tooth-by-tooth with
-   a springy overshoot and a spark; back-strokes only carry the lever home while
-   the holding pawl locks the wheel. The advance is strictly one-way — no matter
-   how you drag, the wheel never unwinds. */
+   spring-loaded coral driving pawl, and a fixed coral holding pawl. Pump the
+   lever: forward strokes accumulate tooth-by-tooth and snap the wheel into the
+   next notch with a springy overshoot, a click of the pawl and a bright spark;
+   back-strokes only carry the lever home while the holding pawl locks the wheel.
+   The advance is strictly one-way — however you drag, the wheel never unwinds.
+   Left alone it sways, and the wheel strains microscopically against its detent. */
 F.register({
   n: 26, id: 'ratchet', cat: 'mech',
   title: 'Ratchet & pawl', hint: 'Drag the lever — it clicks one way only',
@@ -12,11 +13,11 @@ F.register({
     const TAU = Math.PI * 2;
     const AMBER = inks[0], CORAL = inks[1], SKY = inks[3], CREAM = inks[5];
     const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-    const N = 12, PITCH = TAU / N, RISER = 0.17;   // riser = steep fraction of a tooth
+    const N = 12, PITCH = TAU / N, RISER = 0.17;   // riser = steep locking fraction of a tooth
     const LN = Math.PI / 2, SW = 1.15;             // lever neutral (points down) + stroke half-arc
     const CONTACT = 0.17;                          // driving-pawl tip trails the lever by this
     const HOLD = -0.62, HOLD_OFF = 0.34;           // holding-pawl contact angle + anchor lead
-    const SPARK = [0.4, 1.7, 3.0, 4.3];            // spark ray angles (allocated once)
+    const SPARK = [0.4, 1.7, 3.0, 4.3];            // spark ray offsets (allocated once)
 
     // ---- size-derived layout (rebuilt on resize) ----
     let cx = 0, cy = 0, m = 0, Rroot = 0, Rtip = 0, ARM = 0, HANDLE = 0;
@@ -27,7 +28,7 @@ F.register({
       Rtip = 0.30 * m; Rroot = Rtip - 0.075 * m;
       ARM = Rtip + 0.055 * m; HANDLE = Rtip + 0.165 * m;
       LW = Math.max(2, 0.0125 * m);
-      hax = cx + (Rtip + 0.115 * m) * Math.cos(HOLD + HOLD_OFF);       // holding-pawl pivot
+      hax = cx + (Rtip + 0.115 * m) * Math.cos(HOLD + HOLD_OFF);        // holding-pawl pivot
       hay = cy + (Rtip + 0.115 * m) * Math.sin(HOLD + HOLD_OFF);
       hpx = cx + (Rtip + 0.205 * m) * Math.cos(HOLD + HOLD_OFF + 0.17); // its fixed spring post
       hpy = cy + (Rtip + 0.205 * m) * Math.sin(HOLD + HOLD_OFF + 0.17);
@@ -38,8 +39,8 @@ F.register({
       let u = local % PITCH; if (u < 0) u += PITCH;
       const f = u / PITCH;
       return f < RISER
-        ? Rroot + (Rtip - Rroot) * (f / RISER)                 // steep riser (up)
-        : Rtip - (Rtip - Rroot) * ((f - RISER) / (1 - RISER)); // long ramp (down)
+        ? Rroot + (Rtip - Rroot) * (f / RISER)                 // steep riser (locking face)
+        : Rtip - (Rtip - Rroot) * ((f - RISER) / (1 - RISER)); // long gentle ramp
     }
     function coilSpring(x1, y1, x2, y2, coils, amp, wid) {
       const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) + 1e-6;
@@ -52,10 +53,23 @@ F.register({
       }
       g.lineTo(x2, y2); g.stroke();
     }
+    function glow(x, y, a, ang) {
+      g.fillStyle = CREAM;
+      g.globalAlpha = a * 0.20; g.beginPath(); g.arc(x, y, LW * 3.4, 0, TAU); g.fill();
+      g.globalAlpha = a * 0.9; g.beginPath(); g.arc(x, y, LW * (1.0 + a), 0, TAU); g.fill();
+      g.globalAlpha = a * 0.8; g.strokeStyle = CREAM; g.lineWidth = LW * 0.7;
+      for (let i = 0; i < 4; i++) {
+        const ra = SPARK[i] + ang;
+        g.beginPath(); g.moveTo(x, y);
+        g.lineTo(x + LW * (2 + 3 * a) * Math.cos(ra), y + LW * (2 + 3 * a) * Math.sin(ra));
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
 
     // ---- state ----
     let leverAng = LN, leverVel = 0, leverTarget = LN, leverPrev = LN;
-    let drive = 0, lockNotch = 0;          // monotonic: forward-only accumulation + committed detent
+    let drive = 0, lockNotch = 0;          // drive: forward-only accumulation; lockNotch: committed detent
     let wheelAng = 0, wheelVel = 0;
     let flashD = 0, flashH = 0, snap = 0, fAng = LN - CONTACT;
     let grab = null, grabbed = 0, hx = -999, hy = -999;
@@ -64,8 +78,9 @@ F.register({
     return {
       draw(t, dt) {
         const w = env.w, h = env.h;
+        if (dt > 0.05) dt = 0.05; if (!(dt > 0)) dt = 0;
 
-        // ---------- lever (spring toward finger while dragging, else idle sway) ----------
+        // ---------- lever: spring toward finger while dragging, else a gentle idle sway ----------
         const tgt = grab ? leverTarget : LN + Math.sin(t * 1.1 + seed) * 0.028;
         const kL = 170, cL = 2 * 0.62 * Math.sqrt(kL);
         leverVel += (-kL * (leverAng - tgt) - cL * leverVel) * dt;
@@ -79,7 +94,7 @@ F.register({
         if (nn > lockNotch) {                       // one or more teeth committed -> click(s)
           const steps = Math.min(nn - lockNotch, 5);
           lockNotch = nn;
-          wheelVel += 0.8 * steps;                  // little forward kick on top of the step
+          wheelVel += 0.8 * steps;                  // a little forward kick on top of the step
           flashD = 1; flashH = 1; snap = 1; fAng = leverAng - CONTACT;
         }
         if (lockNotch > 120000) {                   // fold huge angles, keeping every phase aligned
@@ -93,8 +108,8 @@ F.register({
         wheelVel += (-kW * (wheelAng - wtar) - cW * wheelVel) * dt;
         wheelVel = clamp(wheelVel, -18, 18);
         wheelAng += wheelVel * dt;
-        const rest = 1 - Math.min(1, Math.abs(wheelVel) * 3 + snap);      // 1 only once settled
-        const wa = wheelAng + rest * (Math.sin(t * 2.4 + seed) * 0.007 +  // micro-creep at idle
+        const settled = 1 - Math.min(1, Math.abs(wheelVel) * 3 + snap);   // 1 only once truly at rest
+        const wa = wheelAng + settled * (Math.sin(t * 2.4 + seed) * 0.007 + // micro-creep, never dead
           Math.sin(t * 5.7 + seed * 2) * 0.004);
 
         // decays
@@ -144,7 +159,7 @@ F.register({
           g.fillStyle = CORAL; g.beginPath(); g.arc(tx, ty, LW * 1.1, 0, TAU); g.fill();
           g.fillStyle = bg; g.beginPath(); g.arc(hax, hay, LW * 0.8, 0, TAU); g.fill();
           g.strokeStyle = CORAL; g.lineWidth = LW * 0.8; g.stroke();
-          if (flashH > 0) glow(tx, ty, flashH);
+          if (flashH > 0) glow(tx, ty, flashH, fAng);
         }
 
         // ---------- lever + driving pawl (amber arm, coral pawl) ----------
@@ -167,7 +182,7 @@ F.register({
         g.strokeStyle = CORAL; g.lineWidth = LW * 1.5;
         g.beginPath(); g.moveTo(dax, day); g.lineTo(dtx, dty); g.stroke();
         g.fillStyle = CORAL; g.beginPath(); g.arc(dtx, dty, LW * 1.1, 0, TAU); g.fill();
-        if (flashD > 0) glow(cx + rSd * Math.cos(fAng), cy + rSd * Math.sin(fAng), flashD);
+        if (flashD > 0) glow(cx + rSd * Math.cos(fAng), cy + rSd * Math.sin(fAng), flashD, fAng);
         // handle knob
         const kr = 0.052 * m;
         g.fillStyle = AMBER; g.beginPath(); g.arc(ahx, ahy, kr, 0, TAU); g.fill();
@@ -186,22 +201,12 @@ F.register({
           g.beginPath(); g.arc(ahx, ahy, kr + LW * 1.6 + pulse * 2, 0, TAU); g.stroke();
           g.globalAlpha = 1;
         }
-
-        function glow(x, y, a) {
-          g.fillStyle = CREAM;
-          g.globalAlpha = a * 0.20; g.beginPath(); g.arc(x, y, LW * 3.4, 0, TAU); g.fill();
-          g.globalAlpha = a * 0.9; g.beginPath(); g.arc(x, y, LW * (1.0 + a), 0, TAU); g.fill();
-          g.globalAlpha = a * 0.8; g.strokeStyle = CREAM; g.lineWidth = LW * 0.7;
-          for (let i = 0; i < 4; i++) {
-            const ra = SPARK[i] + fAng;
-            g.beginPath(); g.moveTo(x, y);
-            g.lineTo(x + LW * (2 + 3 * a) * Math.cos(ra), y + LW * (2 + 3 * a) * Math.sin(ra));
-            g.stroke();
-          }
-          g.globalAlpha = 1;
-        }
       },
-      down(p) { grab = { a0: Math.atan2(p.y - cy, p.x - cx) }; },
+      down(p) {
+        // grab from the lever's current pose so it never lurches on re-grab
+        grab = { a0: Math.atan2(p.y - cy, p.x - cx) };
+        leverTarget = leverAng;
+      },
       move(p) {
         if (grab && p.held) {
           const a = Math.atan2(p.y - cy, p.x - cx);
